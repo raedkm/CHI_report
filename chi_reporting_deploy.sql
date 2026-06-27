@@ -7,16 +7,16 @@
 --   snowsql -f chi_reporting_deploy.sql
 --
 -- DEPLOYMENT ORDER:
---   1. Config (schema + year parameter)
---   2. DM  — Staging → Analytical → Reports
---   3. HTN — Staging → Analytical → Reports
---   4. DLP — Staging → Analytical → Reports
---   5. OB  — Staging → Analytical → Reports
+--   1. Config (schema + year + thresholds)
+--   2. DM  — Staging → Analytical → Reports → Monitoring
+--   3. HTN — Staging → Analytical → Reports → Monitoring
+--   4. DLP — Staging → Analytical → Reports → Monitoring
+--   5. OB  — Staging → Analytical → Reports → Monitoring
 -- ============================================================================
 
 
 -- ======================================================================
--- STEP 1/13: 00_CONFIG
+-- STEP 1/17: 00_CONFIG
 -- ======================================================================
 
 -- ============================================================================
@@ -52,10 +52,96 @@ VALUES (
 -- Verify
 SELECT * FROM CHI_REPORTING.chi_config;
 
+-- ============================================================================
+-- CONTROL THRESHOLDS — Configurable disease control classification
+-- ============================================================================
+-- Each row defines one range for one marker at one control level.
+-- Classification: patient's most recent value is matched against ranges.
+-- For conditions with multiple markers (HTN, DLP), GREATEST(level_order)
+-- across all markers determines the overall control level.
+-- To change thresholds, UPDATE or INSERT rows — no SQL code changes needed.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS CHI_REPORTING.chi_control_thresholds (
+    condition       VARCHAR,          -- 'dm', 'htn', 'dlp', 'ob'
+    marker          VARCHAR,          -- 'a1c', 'sys', 'dia', 'hdl', 'ldl', 'chol', 'trig', 'bmi'
+    gender          VARCHAR,          -- 'Male', 'Female', 'All'
+    control_level   VARCHAR,          -- 'controlled', 'uncontrolled'
+    min_value       DECIMAL(10,2),    -- inclusive lower bound (NULL = unbounded)
+    max_value       DECIMAL(10,2),    -- exclusive upper bound (NULL = unbounded)
+    level_order     INTEGER,          -- 0=best, 3=worst
+    label           VARCHAR           -- DISPLAY label with threshold range
+);
+
+DELETE FROM CHI_REPORTING.chi_control_thresholds;
+
+-- DM — A1C only (ADA Standards of Care)
+INSERT INTO CHI_REPORTING.chi_control_thresholds VALUES
+('dm', 'a1c', 'All', 'controlled',     0.0,  7.0,  0, 'Controlled (A1C < 7.0%)'),
+('dm', 'a1c', 'All', 'uncontrolled',   7.0,  8.0,  1, 'Uncontrolled (A1C 7.0–7.9%)'),
+('dm', 'a1c', 'All', 'uncontrolled',   8.0,  9.0,  2, 'Uncontrolled (A1C 8.0–8.9%)'),
+('dm', 'a1c', 'All', 'uncontrolled',   9.0,  NULL, 3, 'Uncontrolled (A1C ≥ 9.0%)');
+
+-- HTN — SYS + DIA combined (ACC/AHA 2017, adapted for treated patients)
+INSERT INTO CHI_REPORTING.chi_control_thresholds VALUES
+('htn', 'sys', 'All', 'controlled',     0.0, 130.0, 0, 'Controlled (SYS < 130)'),
+('htn', 'sys', 'All', 'uncontrolled', 130.0, 140.0, 1, 'Uncontrolled (SYS 130–139)'),
+('htn', 'sys', 'All', 'uncontrolled', 140.0, 160.0, 2, 'Uncontrolled (SYS 140–159)'),
+('htn', 'sys', 'All', 'uncontrolled', 160.0,  NULL, 3, 'Uncontrolled (SYS ≥ 160)'),
+('htn', 'dia', 'All', 'controlled',     0.0,  80.0, 0, 'Controlled (DIA < 80)'),
+('htn', 'dia', 'All', 'uncontrolled',  80.0,  90.0, 1, 'Uncontrolled (DIA 80–89)'),
+('htn', 'dia', 'All', 'uncontrolled',  90.0, 100.0, 2, 'Uncontrolled (DIA 90–99)'),
+('htn', 'dia', 'All', 'uncontrolled', 100.0,  NULL, 3, 'Uncontrolled (DIA ≥ 100)');
+
+-- DLP — 4 markers, GREATEST of all (gender-specific HDL)
+INSERT INTO CHI_REPORTING.chi_control_thresholds VALUES
+('dlp', 'ldl', 'All', 'controlled',     0.0, 100.0, 0, 'Controlled (LDL < 100)'),
+('dlp', 'ldl', 'All', 'uncontrolled', 100.0, 130.0, 1, 'Uncontrolled (LDL 100–129)'),
+('dlp', 'ldl', 'All', 'uncontrolled', 130.0, 160.0, 2, 'Uncontrolled (LDL 130–159)'),
+('dlp', 'ldl', 'All', 'uncontrolled', 160.0,  NULL, 3, 'Uncontrolled (LDL ≥ 160)'),
+('dlp', 'chol', 'All', 'controlled',     0.0, 200.0, 0, 'Controlled (Chol < 200)'),
+('dlp', 'chol', 'All', 'uncontrolled', 200.0, 240.0, 1, 'Uncontrolled (Chol 200–239)'),
+('dlp', 'chol', 'All', 'uncontrolled', 240.0, 280.0, 2, 'Uncontrolled (Chol 240–279)'),
+('dlp', 'chol', 'All', 'uncontrolled', 280.0,  NULL, 3, 'Uncontrolled (Chol ≥ 280)'),
+('dlp', 'trig', 'All', 'controlled',     0.0, 150.0, 0, 'Controlled (Trig < 150)'),
+('dlp', 'trig', 'All', 'uncontrolled', 150.0, 200.0, 1, 'Uncontrolled (Trig 150–199)'),
+('dlp', 'trig', 'All', 'uncontrolled', 200.0, 500.0, 2, 'Uncontrolled (Trig 200–499)'),
+('dlp', 'trig', 'All', 'uncontrolled', 500.0,  NULL, 3, 'Uncontrolled (Trig ≥ 500)'),
+('dlp', 'hdl', 'Male',   'controlled',   40.0,  NULL, 0, 'Controlled (HDL ≥ 40)'),
+('dlp', 'hdl', 'Male',   'uncontrolled',  0.0,  40.0, 1, 'Uncontrolled (HDL < 40)'),
+('dlp', 'hdl', 'Female', 'controlled',   50.0,  NULL, 0, 'Controlled (HDL ≥ 50)'),
+('dlp', 'hdl', 'Female', 'uncontrolled',  0.0,  50.0, 1, 'Uncontrolled (HDL < 50)');
+
+-- OB — BMI only (WHO classification)
+INSERT INTO CHI_REPORTING.chi_control_thresholds VALUES
+('ob', 'bmi', 'All', 'controlled',   18.5,  25.0, 0, 'Controlled (BMI 18.5–24.9)'),
+('ob', 'bmi', 'All', 'uncontrolled', 25.0,  30.0, 1, 'Uncontrolled (BMI 25.0–29.9)'),
+('ob', 'bmi', 'All', 'uncontrolled', 30.0,  35.0, 2, 'Uncontrolled (BMI 30.0–34.9)'),
+('ob', 'bmi', 'All', 'uncontrolled', 35.0,  NULL, 3, 'Uncontrolled (BMI ≥ 35.0)');
+
+-- ============================================================================
+-- CARE GAP CONFIG — Follow-up compliance targets
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS CHI_REPORTING.chi_care_gap_config (
+    target_quarters_completed  INTEGER,   -- minimum quarters with follow-up to be "compliant"
+    report_year                INTEGER
+);
+
+DELETE FROM CHI_REPORTING.chi_care_gap_config;
+
+INSERT INTO CHI_REPORTING.chi_care_gap_config VALUES (3, 2025);
+
+-- Verify config tables
+SELECT 'chi_control_thresholds' AS config_table, COUNT(*) AS rows
+FROM CHI_REPORTING.chi_control_thresholds
+UNION ALL
+SELECT 'chi_care_gap_config', COUNT(*) FROM CHI_REPORTING.chi_care_gap_config;
+
 
 
 -- ======================================================================
--- STEP 2/13: 01_DM_Staging
+-- STEP 2/17: 01_DM_Staging
 -- ======================================================================
 
 -- ============================================================================
@@ -300,7 +386,7 @@ WHERE pv.STARTDATE >= cfg.report_start
 
 
 -- ======================================================================
--- STEP 3/13: 02_DM_Analytical
+-- STEP 3/17: 02_DM_Analytical
 -- ======================================================================
 
 -- ============================================================================
@@ -509,7 +595,7 @@ LEFT JOIN patient_month_labs pml
 
 
 -- ======================================================================
--- STEP 4/13: 03_DM_Reports
+-- STEP 4/17: 03_DM_Reports
 -- ======================================================================
 
 -- ============================================================================
@@ -803,7 +889,7 @@ ORDER BY health_cluster, sort_order, sort_key;
 
 
 -- ======================================================================
--- STEP 5/13: 04_HTN_Staging
+-- STEP 5/17: 04_HTN_Staging
 -- ======================================================================
 
 -- ============================================================================
@@ -988,7 +1074,7 @@ WHERE pv.STARTDATE >= cfg.report_start
 
 
 -- ======================================================================
--- STEP 6/13: 05_HTN_Analytical
+-- STEP 6/17: 05_HTN_Analytical
 -- ======================================================================
 
 -- ============================================================================
@@ -1162,7 +1248,7 @@ LEFT JOIN patient_month_bp bp
 
 
 -- ======================================================================
--- STEP 7/13: 06_HTN_Reports
+-- STEP 7/17: 06_HTN_Reports
 -- ======================================================================
 
 -- ============================================================================
@@ -1455,7 +1541,7 @@ ORDER BY health_cluster, sort_order, sort_key;
 
 
 -- ======================================================================
--- STEP 8/13: 07_DLP_Staging
+-- STEP 8/17: 07_DLP_Staging
 -- ======================================================================
 
 -- ============================================================================
@@ -1673,7 +1759,7 @@ WHERE pv.STARTDATE >= cfg.report_start
 
 
 -- ======================================================================
--- STEP 9/13: 08_DLP_Analytical
+-- STEP 9/17: 08_DLP_Analytical
 -- ======================================================================
 
 -- ============================================================================
@@ -1878,7 +1964,7 @@ LEFT JOIN patient_month_lipids pml
 
 
 -- ======================================================================
--- STEP 10/13: 09_DLP_Reports
+-- STEP 10/17: 09_DLP_Reports
 -- ======================================================================
 
 -- ============================================================================
@@ -2171,7 +2257,7 @@ ORDER BY health_cluster, sort_order, sort_key;
 
 
 -- ======================================================================
--- STEP 11/13: 10_OB_Staging
+-- STEP 11/17: 10_OB_Staging
 -- ======================================================================
 
 -- ============================================================================
@@ -2341,7 +2427,7 @@ WHERE pv.STARTDATE >= cfg.report_start
 
 
 -- ======================================================================
--- STEP 12/13: 11_OB_Analytical
+-- STEP 12/17: 11_OB_Analytical
 -- ======================================================================
 
 -- ============================================================================
@@ -2490,7 +2576,7 @@ LEFT JOIN patient_month_bmi bmi
 
 
 -- ======================================================================
--- STEP 13/13: 12_OB_Reports
+-- STEP 13/17: 12_OB_Reports
 -- ======================================================================
 
 -- ============================================================================
@@ -2784,5 +2870,1262 @@ ORDER BY health_cluster, sort_order, sort_key;
 
 -- (3) Incidence Report — Monthly
 -- SELECT * FROM CHI_REPORTING.rpt_ob_incidence_monthly ORDER BY health_cluster, sort_order, sort_key;
+-- ============================================================================
+
+
+
+-- ======================================================================
+-- STEP 14/17: 13_DM_Monitoring
+-- ======================================================================
+
+-- ============================================================================
+-- DIABETES MELLITUS (DM) — COMPLIANCE & CARE GAP VIEWS
+-- ============================================================================
+-- Creates 5 views for disease control monitoring and care gap tracking:
+--   1. stg_dm_control_patient      — Patient-level A1C control classification
+--   2. stg_dm_care_gap_quarterly   — Patient × quarter follow-up completion
+--   3. rpt_dm_control              — Aggregated control level report
+--   4. rpt_dm_care_gap_quarterly   — Per-quarter care gap report
+--   5. rpt_dm_care_gap_annual      — Annual care gap distribution
+--
+-- Control monitoring uses A1C only (gold standard for diabetes monitoring).
+-- Care gap checks whether prevalent patients had A1C testing each quarter.
+--
+-- Prerequisites: 00_config.sql, dm_staging_views.sql, dm_analytical_view.sql
+-- ============================================================================
+
+
+-- ############################################################################
+-- VIEW 1: stg_dm_control_patient
+-- ############################################################################
+-- Grain: one row per prevalent DM patient.
+-- Gets the most recent A1C value in the report year and classifies control
+-- using configurable thresholds from chi_control_thresholds.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_dm_control_patient AS
+
+WITH most_recent_a1c AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        pm.gender,
+        MAX_BY(
+            pm.last_a1c_value,
+            CASE WHEN pm.last_a1c_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END
+        )                                           AS year_end_a1c,
+        BOOLOR_AGG(pm.had_a1c)                      AS had_any_a1c
+    FROM CHI_REPORTING.stg_dm_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_dm_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, pm.gender
+),
+
+classified AS (
+    SELECT
+        mr.*,
+        t.level_order,
+        t.label                                     AS control_level_label
+    FROM most_recent_a1c mr
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'dm'
+        AND t.marker = 'a1c'
+        AND (t.gender = 'All' OR t.gender = mr.gender)
+        AND (t.min_value IS NULL OR mr.year_end_a1c >= t.min_value)
+        AND (t.max_value IS NULL OR mr.year_end_a1c < t.max_value)
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    gender,
+    year_end_a1c,
+    had_any_a1c,
+    COALESCE(control_level_label, 'Not Monitored')  AS control_level,
+    COALESCE(level_order, -1)                        AS control_level_order
+FROM classified;
+
+
+-- ############################################################################
+-- VIEW 2: stg_dm_care_gap_quarterly
+-- ############################################################################
+-- Grain: one row per prevalent DM patient per quarter.
+-- A quarter is "completed" if the patient had ≥1 A1C test in that quarter.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_dm_care_gap_quarterly AS
+
+WITH quarterly_followup AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        cfg.report_year,
+        CASE
+            WHEN pm.report_month BETWEEN 1 AND 3  THEN 1
+            WHEN pm.report_month BETWEEN 4 AND 6  THEN 2
+            WHEN pm.report_month BETWEEN 7 AND 9  THEN 3
+            WHEN pm.report_month BETWEEN 10 AND 12 THEN 4
+        END                                         AS quarter,
+        BOOLOR_AGG(pm.had_a1c)                      AS quarter_completed
+    FROM CHI_REPORTING.stg_dm_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_dm_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, cfg.report_year, quarter
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    report_year,
+    SUM(CASE WHEN quarter_completed THEN 1 ELSE 0 END) AS quarters_completed,
+    MAX(CASE WHEN quarter = 1 AND quarter_completed THEN 1 ELSE 0 END) AS q1_completed,
+    MAX(CASE WHEN quarter = 2 AND quarter_completed THEN 1 ELSE 0 END) AS q2_completed,
+    MAX(CASE WHEN quarter = 3 AND quarter_completed THEN 1 ELSE 0 END) AS q3_completed,
+    MAX(CASE WHEN quarter = 4 AND quarter_completed THEN 1 ELSE 0 END) AS q4_completed
+FROM quarterly_followup
+GROUP BY patient_key, health_cluster, report_year;
+
+
+-- ############################################################################
+-- REPORT 4: CONTROL LEVELS (ANNUAL)
+-- ############################################################################
+-- Aggregated count of prevalent patients by control level, per health cluster.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dm_control AS
+
+WITH control_metrics AS (
+    SELECT
+        health_cluster,
+        control_level,
+        control_level_order,
+        COUNT(*)                                    AS patient_count
+    FROM CHI_REPORTING.stg_dm_control_patient
+    GROUP BY health_cluster, control_level, control_level_order
+),
+
+-- Prevalent count per cluster (for percentage denominator)
+prevalent_counts AS (
+    SELECT
+        health_cluster,
+        COUNT(*)                                    AS prevalent_total
+    FROM CHI_REPORTING.stg_dm_control_patient
+    GROUP BY health_cluster
+)
+
+-- Detail rows (sort_order=0)
+SELECT
+    cfg.report_year                                 AS year,
+    cm.health_cluster,
+    cm.control_level,
+    cm.control_level_order,
+    cm.patient_count,
+    ROUND(cm.patient_count * 100.0 / NULLIF(pc.prevalent_total, 0), 2)
+                                                    AS pct_of_prevalent,
+    0                                               AS sort_order
+FROM control_metrics cm
+JOIN prevalent_counts pc USING (health_cluster)
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+UNION ALL
+
+-- Cluster subtotals (sort_order=1)
+SELECT
+    cfg.report_year                                 AS year,
+    cm.health_cluster,
+    '── ' || cm.health_cluster || ' TOTAL ──'       AS control_level,
+    99                                              AS control_level_order,
+    SUM(cm.patient_count)                           AS patient_count,
+    100.0                                           AS pct_of_prevalent,
+    1                                               AS sort_order
+FROM control_metrics cm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, cm.health_cluster
+
+UNION ALL
+
+-- Grand total (sort_order=2)
+SELECT
+    cfg.report_year                                 AS year,
+    '── ALL CLUSTERS ──'                            AS health_cluster,
+    '── ALL CLUSTERS ──'                            AS control_level,
+    99                                              AS control_level_order,
+    SUM(cm.patient_count)                           AS patient_count,
+    100.0                                           AS pct_of_prevalent,
+    2                                               AS sort_order
+FROM control_metrics cm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+ORDER BY health_cluster, sort_order, control_level_order;
+
+
+-- ############################################################################
+-- REPORT 5: CARE GAP (QUARTERLY)
+-- ############################################################################
+-- Per-quarter: how many prevalent patients completed follow-up vs. had a gap.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dm_care_gap_quarterly AS
+
+WITH quarterly_metrics AS (
+    SELECT
+        cg.health_cluster,
+        1 AS quarter,
+        COUNT(*)                                    AS prevalent_count,
+        SUM(cg.q1_completed)                        AS completed_count,
+        prevalent_count - completed_count           AS gap_count,
+        ROUND(completed_count * 100.0 / NULLIF(prevalent_count, 0), 2)
+                                                    AS completion_rate_pct
+    FROM CHI_REPORTING.stg_dm_care_gap_quarterly cg
+    GROUP BY cg.health_cluster
+
+    UNION ALL
+    SELECT
+        cg.health_cluster,
+        2 AS quarter,
+        COUNT(*),
+        SUM(cg.q2_completed),
+        COUNT(*) - SUM(cg.q2_completed),
+        ROUND(SUM(cg.q2_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dm_care_gap_quarterly cg
+    GROUP BY cg.health_cluster
+
+    UNION ALL
+    SELECT
+        cg.health_cluster,
+        3 AS quarter,
+        COUNT(*),
+        SUM(cg.q3_completed),
+        COUNT(*) - SUM(cg.q3_completed),
+        ROUND(SUM(cg.q3_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dm_care_gap_quarterly cg
+    GROUP BY cg.health_cluster
+
+    UNION ALL
+    SELECT
+        cg.health_cluster,
+        4 AS quarter,
+        COUNT(*),
+        SUM(cg.q4_completed),
+        COUNT(*) - SUM(cg.q4_completed),
+        ROUND(SUM(cg.q4_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dm_care_gap_quarterly cg
+    GROUP BY cg.health_cluster
+)
+
+-- Detail rows (sort_order=0)
+SELECT
+    cfg.report_year                                 AS year,
+    qm.health_cluster,
+    qm.quarter,
+    qm.prevalent_count,
+    qm.completed_count,
+    qm.gap_count,
+    qm.completion_rate_pct,
+    qm.quarter                                      AS sort_key,
+    0                                               AS sort_order
+FROM quarterly_metrics qm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+UNION ALL
+
+-- Cluster subtotals (sort_order=1)
+SELECT
+    cfg.report_year                                 AS year,
+    qm.health_cluster,
+    NULL                                            AS quarter,
+    MAX(qm.prevalent_count)                         AS prevalent_count,
+    SUM(qm.completed_count)                         AS completed_count,
+    SUM(qm.gap_count)                               AS gap_count,
+    ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2)
+                                                    AS completion_rate_pct,
+    99                                              AS sort_key,
+    1                                               AS sort_order
+FROM quarterly_metrics qm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, qm.health_cluster
+
+UNION ALL
+
+-- Grand total (sort_order=2)
+SELECT
+    cfg.report_year                                 AS year,
+    '── ALL CLUSTERS ──'                            AS health_cluster,
+    NULL                                            AS quarter,
+    MAX(qm.prevalent_count)                         AS prevalent_count,
+    SUM(qm.completed_count)                         AS completed_count,
+    SUM(qm.gap_count)                               AS gap_count,
+    ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2)
+                                                    AS completion_rate_pct,
+    99                                              AS sort_key,
+    2                                               AS sort_order
+FROM quarterly_metrics qm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ############################################################################
+-- REPORT 6: CARE GAP (ANNUAL)
+-- ############################################################################
+-- Annual distribution: count of patients by number of quarters completed (0-4).
+-- Includes percentage meeting the target from chi_care_gap_config.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dm_care_gap_annual AS
+
+WITH patient_summary AS (
+    SELECT
+        cg.health_cluster,
+        cg.patient_key,
+        cg.quarters_completed,
+        cg.quarters_completed >= gg.target_quarters_completed
+                                                    AS meets_target
+    FROM CHI_REPORTING.stg_dm_care_gap_quarterly cg
+    CROSS JOIN CHI_REPORTING.chi_care_gap_config gg
+    WHERE cg.report_year = gg.report_year
+),
+
+annual_metrics AS (
+    SELECT
+        health_cluster,
+        quarters_completed,
+        COUNT(*)                                    AS patient_count,
+        ROUND(COUNT(*) * 100.0 / NULLIF(
+            SUM(COUNT(*)) OVER (PARTITION BY health_cluster), 0), 2)
+                                                    AS pct_of_prevalent
+    FROM patient_summary
+    GROUP BY health_cluster, quarters_completed
+)
+
+-- Detail rows (sort_order=0)
+SELECT
+    cfg.report_year                                 AS year,
+    am.health_cluster,
+    am.quarters_completed,
+    am.patient_count,
+    am.pct_of_prevalent,
+    am.quarters_completed                           AS sort_key,
+    0                                               AS sort_order
+FROM annual_metrics am
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+UNION ALL
+
+-- Cluster subtotals + meeting target (sort_order=1)
+SELECT
+    cfg.report_year                                 AS year,
+    ps.health_cluster,
+    '≥ Target'                                      AS quarters_completed,
+    SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END) AS patient_count,
+    ROUND(SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END) * 100.0
+          / NULLIF(COUNT(*), 0), 2)                  AS pct_of_prevalent,
+    99                                              AS sort_key,
+    1                                               AS sort_order
+FROM patient_summary ps
+CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, ps.health_cluster
+
+UNION ALL
+
+-- Grand total (sort_order=2)
+SELECT
+    cfg.report_year                                 AS year,
+    '── ALL CLUSTERS ──'                            AS health_cluster,
+    '── ALL CLUSTERS ──'                            AS quarters_completed,
+    SUM(am.patient_count)                           AS patient_count,
+    100.0                                           AS pct_of_prevalent,
+    100                                             AS sort_key,
+    2                                               AS sort_order
+FROM annual_metrics am
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ============================================================================
+-- VERIFY
+-- ============================================================================
+-- SELECT * FROM CHI_REPORTING.stg_dm_control_patient ORDER BY health_cluster, control_level_order;
+-- SELECT * FROM CHI_REPORTING.stg_dm_care_gap_quarterly ORDER BY health_cluster, quarters_completed DESC;
+-- SELECT * FROM CHI_REPORTING.rpt_dm_control ORDER BY health_cluster, sort_order, control_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_dm_care_gap_quarterly ORDER BY health_cluster, sort_order, quarter;
+-- SELECT * FROM CHI_REPORTING.rpt_dm_care_gap_annual ORDER BY health_cluster, sort_order, sort_key;
+-- ============================================================================
+
+
+
+-- ======================================================================
+-- STEP 15/17: 14_HTN_Monitoring
+-- ======================================================================
+
+-- ============================================================================
+-- HYPERTENSION (HTN) — COMPLIANCE & CARE GAP VIEWS
+-- ============================================================================
+-- Creates 5 views for disease control monitoring and care gap tracking:
+--   1. stg_htn_control_patient      — Patient-level BP control classification
+--   2. stg_htn_care_gap_quarterly   — Patient × quarter follow-up completion
+--   3. rpt_htn_control              — Aggregated control level report
+--   4. rpt_htn_care_gap_quarterly   — Per-quarter care gap report
+--   5. rpt_htn_care_gap_annual      — Annual care gap distribution
+--
+-- Control monitoring uses paired SYS + DIA (most recent visit with both).
+-- GREATEST(sys_level, dia_level) determines overall control.
+-- Care gap checks whether prevalent patients had BP measurement each quarter.
+--
+-- Prerequisites: 00_config.sql, htn_staging_views.sql, htn_analytical_view.sql
+-- ============================================================================
+
+
+-- ############################################################################
+-- VIEW 1: stg_htn_control_patient
+-- ############################################################################
+-- Grain: one row per prevalent HTN patient.
+-- Gets the most recent SYS+DIA from the same visit and classifies each marker
+-- using configurable thresholds. Overall = GREATEST(sys_level, dia_level).
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_htn_control_patient AS
+
+WITH most_recent_bp AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        -- Most recent SYS from a month where BOTH were measured
+        MAX_BY(
+            pm.last_sys_value,
+            CASE WHEN pm.last_sys_value IS NOT NULL
+                  AND pm.last_dia_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END
+        )                                           AS year_end_sys,
+        MAX_BY(
+            pm.last_dia_value,
+            CASE WHEN pm.last_sys_value IS NOT NULL
+                  AND pm.last_dia_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END
+        )                                           AS year_end_dia,
+        BOOLOR_AGG(pm.had_bp)                       AS had_any_bp
+    FROM CHI_REPORTING.stg_htn_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_htn_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster
+),
+
+-- Classify SYS
+classified_sys AS (
+    SELECT
+        mr.*,
+        t.level_order                              AS sys_level_order,
+        t.label                                     AS sys_control_label
+    FROM most_recent_bp mr
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'htn'
+        AND t.marker = 'sys'
+        AND (t.min_value IS NULL OR mr.year_end_sys >= t.min_value)
+        AND (t.max_value IS NULL OR mr.year_end_sys < t.max_value)
+),
+
+-- Classify DIA
+classified_dia AS (
+    SELECT
+        cs.*,
+        t.level_order                              AS dia_level_order,
+        t.label                                     AS dia_control_label
+    FROM classified_sys cs
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'htn'
+        AND t.marker = 'dia'
+        AND (t.min_value IS NULL OR cs.year_end_dia >= t.min_value)
+        AND (t.max_value IS NULL OR cs.year_end_dia < t.max_value)
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    year_end_sys,
+    year_end_dia,
+    had_any_bp,
+    sys_control_label,
+    dia_control_label,
+    COALESCE(sys_level_order, -1)                   AS sys_level_order,
+    COALESCE(dia_level_order, -1)                   AS dia_level_order,
+    GREATEST(
+        COALESCE(sys_level_order, -1),
+        COALESCE(dia_level_order, -1)
+    )                                               AS overall_level_order,
+    CASE GREATEST(
+        COALESCE(sys_level_order, -1),
+        COALESCE(dia_level_order, -1)
+    )
+        WHEN -1 THEN 'Not Monitored'
+        WHEN 0  THEN
+            CASE WHEN COALESCE(sys_level_order, -1) > COALESCE(dia_level_order, -1)
+                 THEN sys_control_label ELSE dia_control_label END
+        ELSE
+            CASE WHEN COALESCE(sys_level_order, -1) >= COALESCE(dia_level_order, -1)
+                 THEN sys_control_label ELSE dia_control_label END
+    END                                             AS control_level
+FROM classified_dia;
+
+
+-- ############################################################################
+-- VIEW 2: stg_htn_care_gap_quarterly
+-- ############################################################################
+-- Grain: one row per prevalent HTN patient per quarter.
+-- A quarter is "completed" if the patient had ≥1 BP measurement in that quarter.
+-- had_bp is already TRUE only when both SYS and DIA were measured together.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_htn_care_gap_quarterly AS
+
+WITH quarterly_followup AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        cfg.report_year,
+        CASE
+            WHEN pm.report_month BETWEEN 1 AND 3  THEN 1
+            WHEN pm.report_month BETWEEN 4 AND 6  THEN 2
+            WHEN pm.report_month BETWEEN 7 AND 9  THEN 3
+            WHEN pm.report_month BETWEEN 10 AND 12 THEN 4
+        END                                         AS quarter,
+        BOOLOR_AGG(pm.had_bp)                       AS quarter_completed
+    FROM CHI_REPORTING.stg_htn_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_htn_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, cfg.report_year, quarter
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    report_year,
+    SUM(CASE WHEN quarter_completed THEN 1 ELSE 0 END) AS quarters_completed,
+    MAX(CASE WHEN quarter = 1 AND quarter_completed THEN 1 ELSE 0 END) AS q1_completed,
+    MAX(CASE WHEN quarter = 2 AND quarter_completed THEN 1 ELSE 0 END) AS q2_completed,
+    MAX(CASE WHEN quarter = 3 AND quarter_completed THEN 1 ELSE 0 END) AS q3_completed,
+    MAX(CASE WHEN quarter = 4 AND quarter_completed THEN 1 ELSE 0 END) AS q4_completed
+FROM quarterly_followup
+GROUP BY patient_key, health_cluster, report_year;
+
+
+-- ############################################################################
+-- REPORT 4: CONTROL LEVELS (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_htn_control AS
+
+WITH control_metrics AS (
+    SELECT
+        health_cluster,
+        control_level,
+        overall_level_order,
+        COUNT(*)                                    AS patient_count
+    FROM CHI_REPORTING.stg_htn_control_patient
+    GROUP BY health_cluster, control_level, overall_level_order
+),
+
+prevalent_counts AS (
+    SELECT
+        health_cluster,
+        COUNT(*)                                    AS prevalent_total
+    FROM CHI_REPORTING.stg_htn_control_patient
+    GROUP BY health_cluster
+)
+
+SELECT
+    cfg.report_year                                 AS year,
+    cm.health_cluster,
+    cm.control_level,
+    cm.overall_level_order                          AS control_level_order,
+    cm.patient_count,
+    ROUND(cm.patient_count * 100.0 / NULLIF(pc.prevalent_total, 0), 2)
+                                                    AS pct_of_prevalent,
+    0                                               AS sort_order
+FROM control_metrics cm
+JOIN prevalent_counts pc USING (health_cluster)
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+UNION ALL
+
+SELECT
+    cfg.report_year,
+    cm.health_cluster,
+    '── ' || cm.health_cluster || ' TOTAL ──',
+    99,
+    SUM(cm.patient_count),
+    100.0,
+    1
+FROM control_metrics cm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, cm.health_cluster
+
+UNION ALL
+
+SELECT
+    cfg.report_year,
+    '── ALL CLUSTERS ──',
+    '── ALL CLUSTERS ──',
+    99,
+    SUM(cm.patient_count),
+    100.0,
+    2
+FROM control_metrics cm
+CROSS JOIN CHI_REPORTING.chi_config cfg
+
+ORDER BY health_cluster, sort_order, control_level_order;
+
+
+-- ############################################################################
+-- REPORT 5: CARE GAP (QUARTERLY)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_htn_care_gap_quarterly AS
+
+WITH quarterly_metrics AS (
+    SELECT cg.health_cluster, 1 AS quarter, COUNT(*) AS prevalent_count,
+           SUM(cg.q1_completed) AS completed_count,
+           COUNT(*) - SUM(cg.q1_completed) AS gap_count,
+           ROUND(SUM(cg.q1_completed) * 100.0 / NULLIF(COUNT(*), 0), 2) AS completion_rate_pct
+    FROM CHI_REPORTING.stg_htn_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 2, COUNT(*), SUM(cg.q2_completed),
+           COUNT(*) - SUM(cg.q2_completed),
+           ROUND(SUM(cg.q2_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_htn_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 3, COUNT(*), SUM(cg.q3_completed),
+           COUNT(*) - SUM(cg.q3_completed),
+           ROUND(SUM(cg.q3_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_htn_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 4, COUNT(*), SUM(cg.q4_completed),
+           COUNT(*) - SUM(cg.q4_completed),
+           ROUND(SUM(cg.q4_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_htn_care_gap_quarterly cg GROUP BY cg.health_cluster
+)
+
+SELECT cfg.report_year AS year, qm.health_cluster, qm.quarter,
+       qm.prevalent_count, qm.completed_count, qm.gap_count,
+       qm.completion_rate_pct, qm.quarter AS sort_key, 0 AS sort_order
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, qm.health_cluster, NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 1
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, qm.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 2
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ############################################################################
+-- REPORT 6: CARE GAP (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_htn_care_gap_annual AS
+
+WITH patient_summary AS (
+    SELECT cg.health_cluster, cg.patient_key, cg.quarters_completed,
+           cg.quarters_completed >= gg.target_quarters_completed AS meets_target
+    FROM CHI_REPORTING.stg_htn_care_gap_quarterly cg
+    CROSS JOIN CHI_REPORTING.chi_care_gap_config gg
+    WHERE cg.report_year = gg.report_year
+),
+annual_metrics AS (
+    SELECT health_cluster, quarters_completed, COUNT(*) AS patient_count,
+           ROUND(COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (PARTITION BY health_cluster), 0), 2) AS pct_of_prevalent
+    FROM patient_summary GROUP BY health_cluster, quarters_completed
+)
+SELECT cfg.report_year AS year, am.health_cluster, am.quarters_completed,
+       am.patient_count, am.pct_of_prevalent, am.quarters_completed AS sort_key, 0 AS sort_order
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, ps.health_cluster, '≥ Target',
+       SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END),
+       ROUND(SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2),
+       99, 1
+FROM patient_summary ps CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, ps.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', '── ALL CLUSTERS ──',
+       SUM(am.patient_count), 100.0, 100, 2
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ============================================================================
+-- VERIFY
+-- ============================================================================
+-- SELECT * FROM CHI_REPORTING.stg_htn_control_patient ORDER BY health_cluster, overall_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_htn_control ORDER BY health_cluster, sort_order, control_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_htn_care_gap_quarterly ORDER BY health_cluster, sort_order, quarter;
+-- SELECT * FROM CHI_REPORTING.rpt_htn_care_gap_annual ORDER BY health_cluster, sort_order, sort_key;
+-- ============================================================================
+
+
+
+-- ======================================================================
+-- STEP 16/17: 15_DLP_Monitoring
+-- ======================================================================
+
+-- ============================================================================
+-- DYSLIPIDEMIA (DLP) — COMPLIANCE & CARE GAP VIEWS
+-- ============================================================================
+-- Creates 5 views for disease control monitoring and care gap tracking:
+--   1. stg_dlp_control_patient      — Patient-level lipid control classification
+--   2. stg_dlp_care_gap_quarterly   — Patient × quarter follow-up completion
+--   3. rpt_dlp_control              — Aggregated control level report
+--   4. rpt_dlp_care_gap_quarterly   — Per-quarter care gap report
+--   5. rpt_dlp_care_gap_annual      — Annual care gap distribution
+--
+-- Control monitoring uses all 4 lipid markers (HDL, LDL, CHOL, TRIG).
+-- GREATEST of all 4 marker levels determines overall control.
+-- HDL has gender-specific thresholds (Male: 40, Female: 50).
+-- Care gap checks whether prevalent patients had any lipid panel each quarter.
+--
+-- Prerequisites: 00_config.sql, dlp_staging_views.sql, dlp_analytical_view.sql
+-- ============================================================================
+
+
+-- ############################################################################
+-- VIEW 1: stg_dlp_control_patient
+-- ############################################################################
+-- Grain: one row per prevalent DLP patient.
+-- Gets the most recent value for each of the 4 lipid markers independently
+-- (each marker's most recent non-null month may differ).
+-- Classifies each marker via config thresholds, GREATEST determines overall.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_dlp_control_patient AS
+
+WITH most_recent_lipids AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        pm.gender,
+        MAX_BY(pm.last_hdl_value,
+            CASE WHEN pm.last_hdl_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END)  AS year_end_hdl,
+        MAX_BY(pm.last_ldl_value,
+            CASE WHEN pm.last_ldl_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END)  AS year_end_ldl,
+        MAX_BY(pm.last_chol_value,
+            CASE WHEN pm.last_chol_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END)  AS year_end_chol,
+        MAX_BY(pm.last_trig_value,
+            CASE WHEN pm.last_trig_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END)  AS year_end_trig,
+        BOOLOR_AGG(pm.had_hdl)                      AS had_any_hdl,
+        BOOLOR_AGG(pm.had_ldl)                      AS had_any_ldl,
+        BOOLOR_AGG(pm.had_chol)                     AS had_any_chol,
+        BOOLOR_AGG(pm.had_trig)                     AS had_any_trig
+    FROM CHI_REPORTING.stg_dlp_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_dlp_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, pm.gender
+),
+
+-- Classify each marker independently
+c_hdl AS (
+    SELECT mr.*, t.level_order AS hdl_level_order, t.label AS hdl_control_label
+    FROM most_recent_lipids mr
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'dlp' AND t.marker = 'hdl'
+        AND (t.gender = mr.gender OR t.gender = 'All')
+        AND (t.min_value IS NULL OR mr.year_end_hdl >= t.min_value)
+        AND (t.max_value IS NULL OR mr.year_end_hdl < t.max_value)
+),
+c_ldl AS (
+    SELECT ch.*, t.level_order AS ldl_level_order, t.label AS ldl_control_label
+    FROM c_hdl ch
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'dlp' AND t.marker = 'ldl' AND t.gender = 'All'
+        AND (t.min_value IS NULL OR ch.year_end_ldl >= t.min_value)
+        AND (t.max_value IS NULL OR ch.year_end_ldl < t.max_value)
+),
+c_chol AS (
+    SELECT cl.*, t.level_order AS chol_level_order, t.label AS chol_control_label
+    FROM c_ldl cl
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'dlp' AND t.marker = 'chol' AND t.gender = 'All'
+        AND (t.min_value IS NULL OR cl.year_end_chol >= t.min_value)
+        AND (t.max_value IS NULL OR cl.year_end_chol < t.max_value)
+),
+c_trig AS (
+    SELECT cc.*, t.level_order AS trig_level_order, t.label AS trig_control_label
+    FROM c_chol cc
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'dlp' AND t.marker = 'trig' AND t.gender = 'All'
+        AND (t.min_value IS NULL OR cc.year_end_trig >= t.min_value)
+        AND (t.max_value IS NULL OR cc.year_end_trig < t.max_value)
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    gender,
+    year_end_hdl, year_end_ldl, year_end_chol, year_end_trig,
+    had_any_hdl OR had_any_ldl OR had_any_chol OR had_any_trig
+                                                    AS had_any_lipid,
+    hdl_control_label,
+    COALESCE(hdl_level_order, -1)                   AS hdl_level_order,
+    ldl_control_label,
+    COALESCE(ldl_level_order, -1)                   AS ldl_level_order,
+    chol_control_label,
+    COALESCE(chol_level_order, -1)                  AS chol_level_order,
+    trig_control_label,
+    COALESCE(trig_level_order, -1)                  AS trig_level_order,
+    GREATEST(
+        COALESCE(hdl_level_order, -1),
+        COALESCE(ldl_level_order, -1),
+        COALESCE(chol_level_order, -1),
+        COALESCE(trig_level_order, -1)
+    )                                               AS overall_level_order,
+    CASE GREATEST(
+        COALESCE(hdl_level_order, -1),
+        COALESCE(ldl_level_order, -1),
+        COALESCE(chol_level_order, -1),
+        COALESCE(trig_level_order, -1)
+    )
+        WHEN -1 THEN 'Not Monitored'
+        ELSE
+            -- Find which marker has the worst level and use its label
+            CASE
+                WHEN COALESCE(ldl_level_order, -1) >= COALESCE(hdl_level_order, -1)
+                 AND COALESCE(ldl_level_order, -1) >= COALESCE(chol_level_order, -1)
+                 AND COALESCE(ldl_level_order, -1) >= COALESCE(trig_level_order, -1)
+                THEN ldl_control_label
+                WHEN COALESCE(chol_level_order, -1) >= COALESCE(hdl_level_order, -1)
+                 AND COALESCE(chol_level_order, -1) >= COALESCE(ldl_level_order, -1)
+                 AND COALESCE(chol_level_order, -1) >= COALESCE(trig_level_order, -1)
+                THEN chol_control_label
+                WHEN COALESCE(trig_level_order, -1) >= COALESCE(hdl_level_order, -1)
+                 AND COALESCE(trig_level_order, -1) >= COALESCE(ldl_level_order, -1)
+                 AND COALESCE(trig_level_order, -1) >= COALESCE(chol_level_order, -1)
+                THEN trig_control_label
+                ELSE hdl_control_label
+            END
+    END                                             AS control_level
+FROM c_trig;
+
+
+-- ############################################################################
+-- VIEW 2: stg_dlp_care_gap_quarterly
+-- ############################################################################
+-- A quarter is "completed" if the patient had any lipid panel component that quarter.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_dlp_care_gap_quarterly AS
+
+WITH quarterly_followup AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        cfg.report_year,
+        CASE
+            WHEN pm.report_month BETWEEN 1 AND 3  THEN 1
+            WHEN pm.report_month BETWEEN 4 AND 6  THEN 2
+            WHEN pm.report_month BETWEEN 7 AND 9  THEN 3
+            WHEN pm.report_month BETWEEN 10 AND 12 THEN 4
+        END                                         AS quarter,
+        BOOLOR_AGG(pm.had_hdl OR pm.had_ldl OR pm.had_chol OR pm.had_trig)
+                                                    AS quarter_completed
+    FROM CHI_REPORTING.stg_dlp_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_dlp_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, cfg.report_year, quarter
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    report_year,
+    SUM(CASE WHEN quarter_completed THEN 1 ELSE 0 END) AS quarters_completed,
+    MAX(CASE WHEN quarter = 1 AND quarter_completed THEN 1 ELSE 0 END) AS q1_completed,
+    MAX(CASE WHEN quarter = 2 AND quarter_completed THEN 1 ELSE 0 END) AS q2_completed,
+    MAX(CASE WHEN quarter = 3 AND quarter_completed THEN 1 ELSE 0 END) AS q3_completed,
+    MAX(CASE WHEN quarter = 4 AND quarter_completed THEN 1 ELSE 0 END) AS q4_completed
+FROM quarterly_followup
+GROUP BY patient_key, health_cluster, report_year;
+
+
+-- ############################################################################
+-- REPORT 4: CONTROL LEVELS (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dlp_control AS
+
+WITH control_metrics AS (
+    SELECT health_cluster, control_level, overall_level_order,
+           COUNT(*) AS patient_count
+    FROM CHI_REPORTING.stg_dlp_control_patient
+    GROUP BY health_cluster, control_level, overall_level_order
+),
+prevalent_counts AS (
+    SELECT health_cluster, COUNT(*) AS prevalent_total
+    FROM CHI_REPORTING.stg_dlp_control_patient GROUP BY health_cluster
+)
+SELECT cfg.report_year AS year, cm.health_cluster, cm.control_level,
+       cm.overall_level_order AS control_level_order, cm.patient_count,
+       ROUND(cm.patient_count * 100.0 / NULLIF(pc.prevalent_total, 0), 2) AS pct_of_prevalent,
+       0 AS sort_order
+FROM control_metrics cm JOIN prevalent_counts pc USING (health_cluster)
+CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, cm.health_cluster,
+       '── ' || cm.health_cluster || ' TOTAL ──', 99,
+       SUM(cm.patient_count), 100.0, 1
+FROM control_metrics cm CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, cm.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', '── ALL CLUSTERS ──', 99,
+       SUM(cm.patient_count), 100.0, 2
+FROM control_metrics cm CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, control_level_order;
+
+
+-- ############################################################################
+-- REPORT 5: CARE GAP (QUARTERLY)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dlp_care_gap_quarterly AS
+
+WITH quarterly_metrics AS (
+    SELECT cg.health_cluster, 1 AS quarter, COUNT(*) AS prevalent_count,
+           SUM(cg.q1_completed) AS completed_count,
+           COUNT(*) - SUM(cg.q1_completed) AS gap_count,
+           ROUND(SUM(cg.q1_completed) * 100.0 / NULLIF(COUNT(*), 0), 2) AS completion_rate_pct
+    FROM CHI_REPORTING.stg_dlp_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 2, COUNT(*), SUM(cg.q2_completed),
+           COUNT(*) - SUM(cg.q2_completed),
+           ROUND(SUM(cg.q2_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dlp_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 3, COUNT(*), SUM(cg.q3_completed),
+           COUNT(*) - SUM(cg.q3_completed),
+           ROUND(SUM(cg.q3_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dlp_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 4, COUNT(*), SUM(cg.q4_completed),
+           COUNT(*) - SUM(cg.q4_completed),
+           ROUND(SUM(cg.q4_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_dlp_care_gap_quarterly cg GROUP BY cg.health_cluster
+)
+SELECT cfg.report_year AS year, qm.health_cluster, qm.quarter,
+       qm.prevalent_count, qm.completed_count, qm.gap_count,
+       qm.completion_rate_pct, qm.quarter AS sort_key, 0 AS sort_order
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, qm.health_cluster, NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 1
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, qm.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 2
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ############################################################################
+-- REPORT 6: CARE GAP (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_dlp_care_gap_annual AS
+
+WITH patient_summary AS (
+    SELECT cg.health_cluster, cg.patient_key, cg.quarters_completed,
+           cg.quarters_completed >= gg.target_quarters_completed AS meets_target
+    FROM CHI_REPORTING.stg_dlp_care_gap_quarterly cg
+    CROSS JOIN CHI_REPORTING.chi_care_gap_config gg
+    WHERE cg.report_year = gg.report_year
+),
+annual_metrics AS (
+    SELECT health_cluster, quarters_completed, COUNT(*) AS patient_count,
+           ROUND(COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (PARTITION BY health_cluster), 0), 2) AS pct_of_prevalent
+    FROM patient_summary GROUP BY health_cluster, quarters_completed
+)
+SELECT cfg.report_year AS year, am.health_cluster, am.quarters_completed,
+       am.patient_count, am.pct_of_prevalent, am.quarters_completed AS sort_key, 0 AS sort_order
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, ps.health_cluster, '≥ Target',
+       SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END),
+       ROUND(SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2),
+       99, 1
+FROM patient_summary ps CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, ps.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', '── ALL CLUSTERS ──',
+       SUM(am.patient_count), 100.0, 100, 2
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ============================================================================
+-- VERIFY
+-- ============================================================================
+-- SELECT * FROM CHI_REPORTING.stg_dlp_control_patient ORDER BY health_cluster, overall_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_dlp_control ORDER BY health_cluster, sort_order, control_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_dlp_care_gap_quarterly ORDER BY health_cluster, sort_order, quarter;
+-- SELECT * FROM CHI_REPORTING.rpt_dlp_care_gap_annual ORDER BY health_cluster, sort_order, sort_key;
+-- ============================================================================
+
+
+
+-- ======================================================================
+-- STEP 17/17: 16_OB_Monitoring
+-- ======================================================================
+
+-- ============================================================================
+-- OBESITY (OB) — COMPLIANCE & CARE GAP VIEWS
+-- ============================================================================
+-- Creates 5 views for disease control monitoring and care gap tracking:
+--   1. stg_ob_control_patient       — Patient-level BMI control classification
+--   2. stg_ob_care_gap_quarterly    — Patient × quarter follow-up completion
+--   3. rpt_ob_control               — Aggregated control level report
+--   4. rpt_ob_care_gap_quarterly    — Per-quarter care gap report
+--   5. rpt_ob_care_gap_annual       — Annual care gap distribution
+--
+-- Control monitoring uses BMI only (WHO classification).
+-- Care gap checks whether prevalent patients had BMI measurement each quarter.
+--
+-- Prerequisites: 00_config.sql, ob_staging_views.sql, ob_analytical_view.sql
+-- ============================================================================
+
+
+-- ############################################################################
+-- VIEW 1: stg_ob_control_patient
+-- ############################################################################
+-- Grain: one row per prevalent OB patient.
+-- Gets the most recent BMI value and classifies control using config thresholds.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_ob_control_patient AS
+
+WITH most_recent_bmi AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        MAX_BY(
+            pm.last_bmi_value,
+            CASE WHEN pm.last_bmi_value IS NOT NULL
+                 THEN pm.year_month_key ELSE 0 END
+        )                                           AS year_end_bmi,
+        BOOLOR_AGG(pm.had_bmi)                      AS had_any_bmi
+    FROM CHI_REPORTING.stg_ob_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_ob_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster
+),
+
+classified AS (
+    SELECT
+        mr.*,
+        t.level_order,
+        t.label                                     AS control_level_label
+    FROM most_recent_bmi mr
+    LEFT JOIN CHI_REPORTING.chi_control_thresholds t
+        ON t.condition = 'ob'
+        AND t.marker = 'bmi'
+        AND (t.min_value IS NULL OR mr.year_end_bmi >= t.min_value)
+        AND (t.max_value IS NULL OR mr.year_end_bmi < t.max_value)
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    year_end_bmi,
+    had_any_bmi,
+    COALESCE(control_level_label, 'Not Monitored')  AS control_level,
+    COALESCE(level_order, -1)                        AS control_level_order
+FROM classified;
+
+
+-- ############################################################################
+-- VIEW 2: stg_ob_care_gap_quarterly
+-- ############################################################################
+-- A quarter is "completed" if the patient had ≥1 BMI measurement in that quarter.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_ob_care_gap_quarterly AS
+
+WITH quarterly_followup AS (
+    SELECT
+        pm.patient_key,
+        pm.health_cluster,
+        cfg.report_year,
+        CASE
+            WHEN pm.report_month BETWEEN 1 AND 3  THEN 1
+            WHEN pm.report_month BETWEEN 4 AND 6  THEN 2
+            WHEN pm.report_month BETWEEN 7 AND 9  THEN 3
+            WHEN pm.report_month BETWEEN 10 AND 12 THEN 4
+        END                                         AS quarter,
+        BOOLOR_AGG(pm.had_bmi)                      AS quarter_completed
+    FROM CHI_REPORTING.stg_ob_patient_month pm
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE pm.report_year = cfg.report_year
+      AND pm.is_ob_prevalent = TRUE
+    GROUP BY pm.patient_key, pm.health_cluster, cfg.report_year, quarter
+)
+
+SELECT
+    patient_key,
+    health_cluster,
+    report_year,
+    SUM(CASE WHEN quarter_completed THEN 1 ELSE 0 END) AS quarters_completed,
+    MAX(CASE WHEN quarter = 1 AND quarter_completed THEN 1 ELSE 0 END) AS q1_completed,
+    MAX(CASE WHEN quarter = 2 AND quarter_completed THEN 1 ELSE 0 END) AS q2_completed,
+    MAX(CASE WHEN quarter = 3 AND quarter_completed THEN 1 ELSE 0 END) AS q3_completed,
+    MAX(CASE WHEN quarter = 4 AND quarter_completed THEN 1 ELSE 0 END) AS q4_completed
+FROM quarterly_followup
+GROUP BY patient_key, health_cluster, report_year;
+
+
+-- ############################################################################
+-- REPORT 4: CONTROL LEVELS (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_ob_control AS
+
+WITH control_metrics AS (
+    SELECT health_cluster, control_level, control_level_order,
+           COUNT(*) AS patient_count
+    FROM CHI_REPORTING.stg_ob_control_patient
+    GROUP BY health_cluster, control_level, control_level_order
+),
+prevalent_counts AS (
+    SELECT health_cluster, COUNT(*) AS prevalent_total
+    FROM CHI_REPORTING.stg_ob_control_patient GROUP BY health_cluster
+)
+SELECT cfg.report_year AS year, cm.health_cluster, cm.control_level,
+       cm.control_level_order, cm.patient_count,
+       ROUND(cm.patient_count * 100.0 / NULLIF(pc.prevalent_total, 0), 2) AS pct_of_prevalent,
+       0 AS sort_order
+FROM control_metrics cm JOIN prevalent_counts pc USING (health_cluster)
+CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, cm.health_cluster,
+       '── ' || cm.health_cluster || ' TOTAL ──', 99,
+       SUM(cm.patient_count), 100.0, 1
+FROM control_metrics cm CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, cm.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', '── ALL CLUSTERS ──', 99,
+       SUM(cm.patient_count), 100.0, 2
+FROM control_metrics cm CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, control_level_order;
+
+
+-- ############################################################################
+-- REPORT 5: CARE GAP (QUARTERLY)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_ob_care_gap_quarterly AS
+
+WITH quarterly_metrics AS (
+    SELECT cg.health_cluster, 1 AS quarter, COUNT(*) AS prevalent_count,
+           SUM(cg.q1_completed) AS completed_count,
+           COUNT(*) - SUM(cg.q1_completed) AS gap_count,
+           ROUND(SUM(cg.q1_completed) * 100.0 / NULLIF(COUNT(*), 0), 2) AS completion_rate_pct
+    FROM CHI_REPORTING.stg_ob_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 2, COUNT(*), SUM(cg.q2_completed),
+           COUNT(*) - SUM(cg.q2_completed),
+           ROUND(SUM(cg.q2_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_ob_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 3, COUNT(*), SUM(cg.q3_completed),
+           COUNT(*) - SUM(cg.q3_completed),
+           ROUND(SUM(cg.q3_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_ob_care_gap_quarterly cg GROUP BY cg.health_cluster
+    UNION ALL
+    SELECT cg.health_cluster, 4, COUNT(*), SUM(cg.q4_completed),
+           COUNT(*) - SUM(cg.q4_completed),
+           ROUND(SUM(cg.q4_completed) * 100.0 / NULLIF(COUNT(*), 0), 2)
+    FROM CHI_REPORTING.stg_ob_care_gap_quarterly cg GROUP BY cg.health_cluster
+)
+SELECT cfg.report_year AS year, qm.health_cluster, qm.quarter,
+       qm.prevalent_count, qm.completed_count, qm.gap_count,
+       qm.completion_rate_pct, qm.quarter AS sort_key, 0 AS sort_order
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, qm.health_cluster, NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 1
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, qm.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', NULL,
+       MAX(qm.prevalent_count), SUM(qm.completed_count), SUM(qm.gap_count),
+       ROUND(SUM(qm.completed_count) * 100.0 / NULLIF(SUM(qm.prevalent_count), 0), 2),
+       99, 2
+FROM quarterly_metrics qm CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ############################################################################
+-- REPORT 6: CARE GAP (ANNUAL)
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_ob_care_gap_annual AS
+
+WITH patient_summary AS (
+    SELECT cg.health_cluster, cg.patient_key, cg.quarters_completed,
+           cg.quarters_completed >= gg.target_quarters_completed AS meets_target
+    FROM CHI_REPORTING.stg_ob_care_gap_quarterly cg
+    CROSS JOIN CHI_REPORTING.chi_care_gap_config gg
+    WHERE cg.report_year = gg.report_year
+),
+annual_metrics AS (
+    SELECT health_cluster, quarters_completed, COUNT(*) AS patient_count,
+           ROUND(COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (PARTITION BY health_cluster), 0), 2) AS pct_of_prevalent
+    FROM patient_summary GROUP BY health_cluster, quarters_completed
+)
+SELECT cfg.report_year AS year, am.health_cluster, am.quarters_completed,
+       am.patient_count, am.pct_of_prevalent, am.quarters_completed AS sort_key, 0 AS sort_order
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+UNION ALL
+SELECT cfg.report_year, ps.health_cluster, '≥ Target',
+       SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END),
+       ROUND(SUM(CASE WHEN ps.meets_target THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2),
+       99, 1
+FROM patient_summary ps CROSS JOIN CHI_REPORTING.chi_config cfg
+GROUP BY cfg.report_year, ps.health_cluster
+UNION ALL
+SELECT cfg.report_year, '── ALL CLUSTERS ──', '── ALL CLUSTERS ──',
+       SUM(am.patient_count), 100.0, 100, 2
+FROM annual_metrics am CROSS JOIN CHI_REPORTING.chi_config cfg
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ============================================================================
+-- VERIFY
+-- ============================================================================
+-- SELECT * FROM CHI_REPORTING.stg_ob_control_patient ORDER BY health_cluster, control_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_ob_control ORDER BY health_cluster, sort_order, control_level_order;
+-- SELECT * FROM CHI_REPORTING.rpt_ob_care_gap_quarterly ORDER BY health_cluster, sort_order, quarter;
+-- SELECT * FROM CHI_REPORTING.rpt_ob_care_gap_annual ORDER BY health_cluster, sort_order, sort_key;
 -- ============================================================================
 
