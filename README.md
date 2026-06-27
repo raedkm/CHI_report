@@ -114,14 +114,19 @@ Three views per condition, each aggregating `stg_{cond}_patient_month` into the 
 
 ### Why Not a Single Monolithic Query?
 
-The original codebase used monolithic CTE-based queries (kept in `project_queries/` as legacy reference). These had:
+The original codebase (preserved in [`archive/NMR_queries/`](archive/NMR_queries/)) used monolithic CTE-based queries — one giant SQL file per condition that produced all 3 reports in a single execution. These files (~127–183 lines each) chained 12+ CTEs together with no intermediate checkpoints.
 
-| Problem | Staging Solution |
-|---------|-----------------|
-| Each condition duplicated eligibility logic | `stg_{cond}_cohort` defined once |
-| Classification logic duplicated across 3 reports | `stg_{cond}_patient_month` classifies once |
-| No intermediate debugging | Each `stg_*` view is independently `SELECT`able |
-| Changing one report risked breaking others | Reports are independent consumers of the same analytical grain |
+**What made the monoliths problematic:**
+
+| Problem | Real-World Impact | Staging Solution |
+|---------|-------------------|-----------------|
+| Eligibility criteria duplicated in every CTE | Changing "age > 18" to "age ≥ 18" required finding and updating it in 4+ CTEs per file | `stg_{cond}_cohort` defines eligibility once |
+| Classification logic copy-pasted across screening, prevalence, and incidence queries | Fixing a lab threshold meant updating it in 3 different CTE chains — one was always missed | `stg_{cond}_patient_month` classifies once, all 3 reports consume it |
+| No way to inspect intermediate results | Debugging meant adding `SELECT * FROM cte_7` blocks mid-query, running truncated SQL, and hoping | Each `stg_*` view is independently queryable — `SELECT * FROM stg_htn_patient_month WHERE patient_key = 'P03'` |
+| One syntax error broke all 3 reports | A missing comma in the screening CTE prevented prevalence and incidence from running too | Reports are independent — a bug in `rpt_dm_screening` doesn't affect `rpt_dm_prevalence` |
+| Adding a dimension (e.g., health cluster) required touching every CTE | The health cluster addition touched 5+ CTEs per condition in the monolith; in staging it enters at the cohort and flows through | New dimensions enter at the staging layer and propagate automatically |
+
+**Concrete example:** The legacy `archive/NMR_queries/Diabitic report 14-6-26.sql` computes at-risk population, screening results, prevalence, and incidence all in one 175-line CTE chain. To change the report year, you find-and-replace `'2025-01-01'` across the entire file. In the staging system, you update one row in `CHI_REPORTING.chi_config` and re-run.
 
 ---
 
