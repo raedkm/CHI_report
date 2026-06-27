@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Community Health Indicators (CHI) reporting project. Generates **3 report types** across **4 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
+Community Health Indicators (CHI) reporting project. Generates **6 report types** across **4 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
 
 | Report | Frequency | What It Measures |
 |--------|-----------|-----------------|
 | **Screening Report** | Monthly | % of at-risk population tested for the condition |
 | **Prevalence Report** | Annual | % of total population with the condition at year-end |
 | **Incidence Report** | Monthly | Rate of new cases developing among at-risk population |
+| **Control Level Report** | Annual | Disease control classification for diagnosed patients using configurable thresholds |
+| **Care Gap (Quarterly)** | Quarterly | % of diagnosed patients completing follow-up visits/labs each quarter |
+| **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (0-4) |
 
 ### Chronic Conditions & Their Data Sources
 
@@ -27,40 +30,51 @@ Key distinction: **HTN and Obesity use OBSERVATIONS only** (vitals/clinic measur
 
 The production Snowflake queries are organized as **modular views** in `project_queries/views/`. Each pipeline stage is a standalone `CREATE OR REPLACE VIEW` — independently queryable for debugging.
 
-### File Structure (13 files, 38-231 lines each)
+### File Structure (17 files, 38-377 lines each)
 
 ```
 project_queries/views/
-├── 00_config.sql              -- CHI_REPORTING.chi_config table (report year parameter)
+├── 00_config.sql              -- CHI_REPORTING.chi_config, chi_control_thresholds, chi_care_gap_config
 │
 ├── dm_staging_views.sql       -- stg_dm_cohort, stg_dm_diagnosis, stg_dm_labs
 ├── dm_analytical_view.sql     -- stg_dm_patient_month (dual-unit FBS + A1C classification)
 ├── dm_report_views.sql        -- rpt_dm_screening/prevalence/incidence
+├── dm_monitoring_views.sql    -- stg_dm_control_patient, stg_dm_care_gap_quarterly, rpt_dm_control, rpt_dm_care_gap_quarterly, rpt_dm_care_gap_annual
 │
 ├── htn_staging_views.sql      -- stg_htn_cohort, stg_htn_diagnosis, stg_htn_labs (SYS/DIA)
 ├── htn_analytical_view.sql    -- stg_htn_patient_month (paired SYS+DIA per visit, combined thresholds)
 ├── htn_report_views.sql       -- rpt_htn_screening/prevalence/incidence
+├── htn_monitoring_views.sql   -- stg_htn_control_patient, stg_htn_care_gap_quarterly, rpt_htn_control, rpt_htn_care_gap_quarterly, rpt_htn_care_gap_annual
 │
 ├── dlp_staging_views.sql      -- stg_dlp_cohort, stg_dlp_diagnosis, stg_dlp_labs (4 lipid markers)
 ├── dlp_analytical_view.sql    -- stg_dlp_patient_month (gender-specific HDL, GREATEST of 4)
 ├── dlp_report_views.sql       -- rpt_dlp_screening/prevalence/incidence
+├── dlp_monitoring_views.sql   -- stg_dlp_control_patient, stg_dlp_care_gap_quarterly, rpt_dlp_control, rpt_dlp_care_gap_quarterly, rpt_dlp_care_gap_annual
 │
 ├── ob_staging_views.sql       -- stg_ob_cohort, stg_ob_diagnosis, stg_ob_labs (BMI + outlier filter)
 ├── ob_analytical_view.sql     -- stg_ob_patient_month (WHO BMI classification)
-└── ob_report_views.sql        -- rpt_ob_screening/prevalence/incidence
+├── ob_report_views.sql        -- rpt_ob_screening/prevalence/incidence
+└── ob_monitoring_views.sql    -- stg_ob_control_patient, stg_ob_care_gap_quarterly, rpt_ob_control, rpt_ob_care_gap_quarterly, rpt_ob_care_gap_annual
 ```
 
 ### View Dependency Chain (per condition)
 
 ```
-chi_config (shared)
+chi_config + chi_control_thresholds + chi_care_gap_config (shared)
     ├──► stg_{cond}_cohort      (patient × year — demographics + diagnosis flags)
     ├──► stg_{cond}_diagnosis   (patient × diagnosis — ICD-10 records, ranked)
     └──► stg_{cond}_labs        (patient × visit — standardized lab/obs results)
                 └──► stg_{cond}_patient_month  (patient × month — analytical grain)
                             ├──► rpt_{cond}_screening_monthly
                             ├──► rpt_{cond}_prevalence_annual  (reads from stg_*_cohort)
-                            └──► rpt_{cond}_incidence_monthly
+                            ├──► rpt_{cond}_incidence_monthly
+                            │
+                            ├──► stg_{cond}_control_patient   (prevalent patient × year-end values)
+                            │       └──► rpt_{cond}_control   (control level distribution)
+                            │
+                            └──► stg_{cond}_care_gap_quarterly (prevalent patient × quarter)
+                                    ├──► rpt_{cond}_care_gap_quarterly
+                                    └──► rpt_{cond}_care_gap_annual
 ```
 
 ### Usage
@@ -97,7 +111,7 @@ The original monolithic CTE-based queries are kept in `project_queries/` for ref
 
 ## Target Architecture
 
-All reports for a condition share a common **staging pipeline** before splitting into 3 outputs:
+All reports for a condition share a common **staging pipeline** before splitting into 6 outputs:
 
 ```
 NMR.LEANHIS (Source EMR)
@@ -110,8 +124,53 @@ NMR.LEANHIS (Source EMR)
                             │
                             ├──► rpt_{cond}_screening_monthly
                             ├──► rpt_{cond}_prevalence_annual
-                            └──► rpt_{cond}_incidence_monthly
+                            ├──► rpt_{cond}_incidence_monthly
+                            │
+                            ├──► stg_{cond}_control_patient (patient-level control classification)
+                            │       └──► rpt_{cond}_control
+                            │
+                            └──► stg_{cond}_care_gap_quarterly (patient × quarter)
+                                    ├──► rpt_{cond}_care_gap_quarterly
+                                    └──► rpt_{cond}_care_gap_annual
 ```
+
+## Compliance & Care Gap Module
+
+### Config Tables
+
+**`chi_control_thresholds`** — Configurable disease control classification (30 rows across 4 conditions):
+- Per-condition, per-marker ranges with min/max bounds
+- Gender-specific thresholds (HDL for DLP: Male ≥40, Female ≥50)
+- Descriptive labels include threshold ranges (e.g. "Controlled (A1C < 7.0%)")
+- `level_order` (0-3) determines severity; GREATEST across markers = overall level
+
+**`chi_care_gap_config`** — Single-row config: `target_quarters_completed` (default: 3)
+
+### Control Monitoring Markers
+
+| Condition | Marker(s) | Classification Method |
+|-----------|-----------|----------------------|
+| DM | A1C only | Most recent A1C value → threshold lookup |
+| HTN | SYS + DIA (paired) | Most recent visit with both → classify each → GREATEST |
+| DLP | HDL, LDL, CHOL, TRIG | Each marker from most recent non-null month → GREATEST of 4 |
+| OB | BMI only | Most recent BMI value → threshold lookup |
+
+### Care Gap Logic
+
+- Year divided into 4 quarters (Q1: Jan-Mar, Q2: Apr-Jun, Q3: Jul-Sep, Q4: Oct-Dec)
+- Quarter "completed" = ≥1 visit with the condition-specific lab that quarter
+- Condition-specific lab checks: DM=A1C, HTN=had_bp (SYS+DIA paired), DLP=any lipid, OB=BMI
+- Annual report counts patients by quarters_completed (0-4), includes "≥ Target" row
+
+### Monitoring View Inventory (5 per condition × 4 = 20 views)
+
+| View | Grain | Purpose |
+|------|-------|---------|
+| `stg_{cond}_control_patient` | 1 row / prevalent patient | Year-end lab value + control classification |
+| `stg_{cond}_care_gap_quarterly` | 1 row / prevalent patient | Quarters completed + Q1-Q4 flags |
+| `rpt_{cond}_control` | health_cluster × control_level | Aggregated control distribution |
+| `rpt_{cond}_care_gap_quarterly` | health_cluster × quarter | Per-quarter completion rates |
+| `rpt_{cond}_care_gap_annual` | health_cluster × quarters_completed | Annual distribution + target % |
 
 ### Naming Convention
 
@@ -196,8 +255,8 @@ Local development/testing uses DuckDB. The simulation database is in `data/`; Py
 | `data/chi_sim.db` | DuckDB database (20 synthetic patients, 2025 data) |
 | `scripts/generate_synthetic_data.py` | Creates base DM data |
 | `scripts/extend_data_htn_dlp_ob.py` | Adds HTN/DLP/OB data to the simulation |
-| `scripts/create_views_in_duckdb.py` | Creates all 24 CHI_REPORTING views (DuckDB dialect) |
-| `scripts/run_all_reports.py` | Config-driven runner for all 4 conditions |
+| `scripts/create_views_in_duckdb.py` | Creates all 44 CHI_REPORTING views incl. compliance & care gap (DuckDB dialect) |
+| `scripts/run_all_reports.py` | Config-driven runner for all 4 conditions — 6 reports each |
 
 Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|all]`
 
@@ -214,6 +273,8 @@ When porting from the DuckDB simulation to Snowflake SQL:
 | `regexp_extract()` | `REGEXP_SUBSTR()` |
 | `strftime(date, '%b %Y')` | `TO_VARCHAR(date, 'MON YYYY')` |
 | `arg_max(val, order)` | `MAX_BY(val, order)` |
+| `bool_or()` | `BOOLOR_AGG()` |
+| `QUARTER(date)` / custom CASE | Quarter computed from report_month ranges |
 
 ## Legacy Files
 
