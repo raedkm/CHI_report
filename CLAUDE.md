@@ -1,0 +1,230 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+Community Health Indicators (CHI) reporting project. Generates **3 report types** across **4 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
+
+| Report | Frequency | What It Measures |
+|--------|-----------|-----------------|
+| **Screening Report** | Monthly | % of at-risk population tested for the condition |
+| **Prevalence Report** | Annual | % of total population with the condition at year-end |
+| **Incidence Report** | Monthly | Rate of new cases developing among at-risk population |
+
+### Chronic Conditions & Their Data Sources
+
+| Condition | Source Tables | Key Markers |
+|-----------|--------------|-------------|
+| **Diabetes Mellitus (DM)** | LABRESULTS + OBSERVATIONS (UNION ALL) | FBS, HbA1c |
+| **Hypertension (HTN)** | OBSERVATIONS only | Systolic BP, Diastolic BP |
+| **Dyslipidemia (DLP)** | LABRESULTS + OBSERVATIONS (UNION ALL) | HDL, LDL, Cholesterol, Triglyceride |
+| **Obesity (OB)** | OBSERVATIONS only | BMI |
+
+Key distinction: **HTN and Obesity use OBSERVATIONS only** (vitals/clinic measurements). **DM and DLP use both** LABRESULTS and OBSERVATIONS since these tests can be recorded in either table.
+
+## Project Queries — Modular Views (Primary)
+
+The production Snowflake queries are organized as **modular views** in `project_queries/views/`. Each pipeline stage is a standalone `CREATE OR REPLACE VIEW` — independently queryable for debugging.
+
+### File Structure (13 files, 38-231 lines each)
+
+```
+project_queries/views/
+├── 00_config.sql              -- CHI_REPORTING.chi_config table (report year parameter)
+│
+├── dm_staging_views.sql       -- stg_dm_cohort, stg_dm_diagnosis, stg_dm_labs
+├── dm_analytical_view.sql     -- stg_dm_patient_month (dual-unit FBS + A1C classification)
+├── dm_report_views.sql        -- rpt_dm_screening/prevalence/incidence
+│
+├── htn_staging_views.sql      -- stg_htn_cohort, stg_htn_diagnosis, stg_htn_labs (SYS/DIA)
+├── htn_analytical_view.sql    -- stg_htn_patient_month (paired SYS+DIA per visit, combined thresholds)
+├── htn_report_views.sql       -- rpt_htn_screening/prevalence/incidence
+│
+├── dlp_staging_views.sql      -- stg_dlp_cohort, stg_dlp_diagnosis, stg_dlp_labs (4 lipid markers)
+├── dlp_analytical_view.sql    -- stg_dlp_patient_month (gender-specific HDL, GREATEST of 4)
+├── dlp_report_views.sql       -- rpt_dlp_screening/prevalence/incidence
+│
+├── ob_staging_views.sql       -- stg_ob_cohort, stg_ob_diagnosis, stg_ob_labs (BMI + outlier filter)
+├── ob_analytical_view.sql     -- stg_ob_patient_month (WHO BMI classification)
+└── ob_report_views.sql        -- rpt_ob_screening/prevalence/incidence
+```
+
+### View Dependency Chain (per condition)
+
+```
+chi_config (shared)
+    ├──► stg_{cond}_cohort      (patient × year — demographics + diagnosis flags)
+    ├──► stg_{cond}_diagnosis   (patient × diagnosis — ICD-10 records, ranked)
+    └──► stg_{cond}_labs        (patient × visit — standardized lab/obs results)
+                └──► stg_{cond}_patient_month  (patient × month — analytical grain)
+                            ├──► rpt_{cond}_screening_monthly
+                            ├──► rpt_{cond}_prevalence_annual  (reads from stg_*_cohort)
+                            └──► rpt_{cond}_incidence_monthly
+```
+
+### Usage
+
+1. Run `00_config.sql` once to create the schema + config table
+2. Run `{cond}_staging_views.sql` → creates 3 staging views
+3. Run `{cond}_analytical_view.sql` → creates patient_month view
+4. Run `{cond}_report_views.sql` → creates 3 report views
+5. Debug any stage: `SELECT * FROM CHI_REPORTING.stg_htn_patient_month WHERE patient_key = 'P03'`
+6. Change year: `UPDATE CHI_REPORTING.chi_config SET report_year = 2026, ...` then re-run step 2-4
+
+### Parameterization
+
+All views reference `CHI_REPORTING.chi_config` (a single-row table) via `CROSS JOIN` for report year/date range. Change the year by updating one row — no hardcoded dates in any view.
+
+## Key Reference Documents
+
+| File | Purpose |
+|------|---------|
+| `Diabetes Indicators.docx` | Logic flow diagrams (source of truth for all conditions) |
+| [conceptual_map_dm.md](conceptual_map_dm.md) | Cohort definitions, 3-report logic flow, ICD-10/lab reference for DM |
+| [table_definitions_dm.md](table_definitions_dm.md) | All staging and report table schemas with column names and types |
+
+### Monolithic SQL files (legacy reference)
+
+The original monolithic CTE-based queries are kept in `project_queries/` for reference. The views above are the modular replacement:
+
+| File | Status |
+|------|--------|
+| [dm_reports.sql](project_queries/dm_reports.sql) | Replaced by views/dm_*.sql |
+| [htn_reports.sql](project_queries/htn_reports.sql) | Replaced by views/htn_*.sql |
+| [dlp_reports.sql](project_queries/dlp_reports.sql) | Replaced by views/dlp_*.sql |
+| [ob_reports.sql](project_queries/ob_reports.sql) | Replaced by views/ob_*.sql |
+
+## Target Architecture
+
+All reports for a condition share a common **staging pipeline** before splitting into 3 outputs:
+
+```
+NMR.LEANHIS (Source EMR)
+    │
+    ├──► stg_{cond}_cohort          (patient × year — demographic flags, cohort membership)
+    ├──► stg_{cond}_diagnosis       (patient × diagnosis — ICD-10/problem-list records)
+    └──► stg_{cond}_labs            (patient × lab/obs — screening results, standardized names)
+                │
+                └──► stg_{cond}_patient_month  (patient × month — core analytical grain)
+                            │
+                            ├──► rpt_{cond}_screening_monthly
+                            ├──► rpt_{cond}_prevalence_annual
+                            └──► rpt_{cond}_incidence_monthly
+```
+
+### Naming Convention
+
+| Prefix | Purpose | Example |
+|--------|---------|---------|
+| `stg_` | Staging table (patient-level, derived from EMR) | `stg_dm_cohort` |
+| `rpt_` | Report output table (aggregated metrics) | `rpt_dm_screening_monthly` |
+
+Condition codes: `dm`, `htn`, `dlp`, `ob`
+
+### Standard Column Naming (used across all conditions)
+
+| Pattern | Example | Meaning |
+|---------|---------|---------|
+| `patient_key` | — | Unique patient identifier |
+| `year_month_key` | `202501` | YYYYMM integer for monthly grain |
+| `is_*` | `is_screened`, `is_in_at_risk` | Boolean flag |
+| `has_*` | `has_any_dm_diagnosis` | Ever/currently has a condition |
+| `first_*_date` | `first_e11_date` | Date of first occurrence |
+| `had_*` | `had_fbs`, `had_visit` | Event occurred in period |
+| `last_*_value` | `last_fbs_value` | Most recent value in period |
+| `*_count` | `screened_count` | Aggregated count |
+| `*_pct` | `screening_rate_pct` | Percentage |
+| `*_per_100k` | `incidence_rate_per_100k` | Rate per 100,000 |
+
+### Report Output Columns (standardized across conditions)
+
+All report tables include:
+- `report_year`, `report_month` / `period_label`
+- Denominator, numerator, breakdown counts
+- Rate metrics (pct or per 100k)
+- `sort_key` for ordering (month detail rows first, yearly total row last)
+
+## Database Schema (Source EMR — NMR.LEANHIS)
+
+- **`PATIENTS`** — Demographics: `_ID`, `NATIONALID`, `GENDERUID`, `DATEOFBIRTH`, `DATEOFDEATH`
+- **`PATIENTVISITS`** — Visits: `_ID`, `PATIENTUID`, `STARTDATE`
+- **`LABRESULTS`** / **`LABRESULTS_RESULTVALUES`** — Lab results: joined on `LABRESULTS._ID = LABRESULTS_RESULTVALUES.LABRESULTS_ID`
+- **`OBSERVATIONS`** / **`OBSERVATIONS_OBSERVATIONVALUES`** — Clinical observations: joined on `OBSERVATIONS._ID = OBSERVATIONS_OBSERVATIONVALUES.OBSERVATIONS_ID`
+- **`DIAGNOSIS_CODES`** — **[PLACEHOLDER]** ICD-10 diagnosis/problem-list. Exact table name TBD.
+
+## Screening Classification Thresholds
+
+**Diabetes** — `GREATEST(FBS_category, A1C_category)`:
+- FBS (mg/dL): normal ≤ 99 | elevated 100–125 | abnormal > 125
+- FBS (mmol/L): normal ≤ 5.5 | elevated 5.6–6.9 | abnormal > 6.9
+- A1C: normal < 5.7 | elevated 5.7–6.4 | abnormal > 6.4
+
+**Hypertension** — Combined SYS/DIA:
+- normal: SYS < 120 AND DIA < 80
+- elevated: SYS 120–129 OR DIA 80–89
+- abnormal: SYS ≥ 130 OR DIA ≥ 90
+
+**Obesity** — BMI:
+- underweight < 18.5 | normal 18.5–24.9 | overweight 25–29.9 | obese ≥ 30
+- Outliers: excludes BMI < 10 or > 80
+
+**Dyslipidemia** — `GREATEST(HDL, Triglyceride, Cholesterol, LDL)` with gender-specific HDL:
+- HDL (male): abnormal < 40 | HDL (female): abnormal < 50
+- Triglyceride: normal < 150 | elevated 150–199 | abnormal ≥ 200
+- Cholesterol: normal < 200 | elevated 200–239 | abnormal ≥ 240
+- LDL: normal < 130 | elevated 130–159 | abnormal ≥ 160
+
+## Snowflake-Specific Functions
+
+- `MAX_BY(expr, order_expr)` — Value of `expr` at max `order_expr`
+- `TRY_TO_DECIMAL(str, p, s)` — Safe string-to-number
+- `REGEXP_SUBSTR(str, pattern)` — Regex extraction
+- `TO_VARCHAR(date, fmt)` / `TO_DATE(str, fmt)` — Date formatting
+- `NULLIF(expr, 0)` — Zero → NULL
+- `IFF(condition, then, else)` — Ternary
+- `BOOLOR_AGG(condition)` — True if any row matches
+- `GREATEST(a, b, ...)` — Max across columns (used for worst-category classification)
+- `ADD_MONTHS(date, n)` — Date arithmetic
+
+## DuckDB Simulation
+
+Local development/testing uses DuckDB. The simulation database and runners are in `data/`:
+
+| File | Purpose |
+|------|---------|
+| `data/chi_sim.db` | DuckDB database (20 synthetic patients, 2025 data) |
+| `data/generate_synthetic_data.py` | Creates base DM data |
+| `data/extend_data_htn_dlp_ob.py` | Adds HTN/DLP/OB data to the simulation |
+| `data/run_all_reports.py` | Config-driven runner for all 4 conditions |
+| `data/pyproject.toml` | uv project config (`uv run python ...`) |
+
+Usage: `uv run python data/run_all_reports.py [dm|htn|dlp|ob|all]`
+
+### DuckDB → Snowflake Dialect Mapping
+
+When porting from the DuckDB simulation to Snowflake SQL:
+
+| DuckDB | Snowflake |
+|--------|-----------|
+| `strptime(x, '%Y%m')` | `TO_DATE(x::VARCHAR \|\| '01', 'YYYYMMDD')` |
+| `strptime(x, '%Y%m') + INTERVAL 1 MONTH` | `ADD_MONTHS(TO_DATE(...), 1)` |
+| `bool_or()` | `BOOLOR_AGG()` |
+| `TRY_CAST(x AS DECIMAL(10,2))` | `TRY_TO_DECIMAL(x, 10, 2)` |
+| `regexp_extract()` | `REGEXP_SUBSTR()` |
+| `strftime(date, '%b %Y')` | `TO_VARCHAR(date, 'MON YYYY')` |
+| `arg_max(val, order)` | `MAX_BY(val, order)` |
+
+## Legacy Files
+
+| File | Status |
+|------|--------|
+| `Diabitic report 14-6-26.sql` | Legacy — replaced by views/dm_*.sql |
+| `HYPERTENSION report 14-6-26.sql` | Legacy — replaced by views/htn_*.sql |
+| `Obesity report 14-6-26.sql` | Legacy — replaced by views/ob_*.sql |
+| `dlp report 14-6-26.sql` | Legacy — replaced by views/dlp_*.sql |
+| `project_queries/dm_reports.sql` | Legacy — replaced by views/dm_*.sql (monolithic CTE version, kept for reference) |
+| `project_queries/htn_reports.sql` | Legacy — replaced by views/htn_*.sql |
+| `project_queries/dlp_reports.sql` | Legacy — replaced by views/dlp_*.sql |
+| `project_queries/ob_reports.sql` | Legacy — replaced by views/ob_*.sql |
+| `DM.xlsx`, `HTN.xlsx`, `Obesity.xlsx`, `DLP.xlsx` | Outputs from legacy queries |
