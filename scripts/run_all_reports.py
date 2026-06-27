@@ -54,6 +54,7 @@ def print_table(columns, rows, formats=None):
 
 CONDITIONS = {
     "dm": {
+        "code": "dm",
         "name": "Diabetes Mellitus (DM)",
         "icd10_codes": ["E10", "E11", "E13", "E14", "O24"],
         "target_icd10": "E11",
@@ -68,6 +69,7 @@ CONDITIONS = {
         "obs_names": ["Fasting glucose", "Hemoglobin A1c."],
     },
     "htn": {
+        "code": "htn",
         "name": "Hypertension (HTN)",
         "icd10_codes": ["I10", "I11", "I12", "I13", "I15"],
         "target_icd10": "I10",
@@ -76,6 +78,7 @@ CONDITIONS = {
         "obs_names": ["Systolic BP", "Diastolic BP"],
     },
     "dlp": {
+        "code": "dlp",
         "name": "Dyslipidemia (DLP)",
         "icd10_codes": ["E78"],
         "target_icd10": "E78",
@@ -90,6 +93,7 @@ CONDITIONS = {
         "obs_names": ["Cholesterol.in HDL", "Cholesterol in HDL", "Triglyceride"],
     },
     "ob": {
+        "code": "ob",
         "name": "Obesity (OB)",
         "icd10_codes": ["E66"],
         "target_icd10": "E66",
@@ -629,6 +633,76 @@ ORDER BY health_cluster, sort_order, sort_key
         rows,
         [str, str, str, str, lambda v: f"{v:.1f}" if v is not None else "  N/A"]
     )
+
+    # --- Compliance & Care Gap reports (query CHI_REPORTING views directly) ---
+    run_monitoring(con, cfg)
+
+
+def run_monitoring(con, cfg):
+    """Query the CHI_REPORTING monitoring views for compliance & care gap reports."""
+    name = cfg["name"]
+    cond = cfg["code"]
+
+    # Report 4: Control Levels
+    ctrl_sql = f"""
+    SELECT health_cluster, control_level, patient_count, pct_of_prevalent
+    FROM CHI_REPORTING.rpt_{cond}_control
+    WHERE sort_order = 0
+    ORDER BY health_cluster, control_level_order_int
+    """
+    try:
+        rows = run_query(con, ctrl_sql)
+        if rows:
+            subheader(f"{name} — Report 4: Control Levels")
+            print_table(
+                ["Cluster", "Control Level", "Patients", "% of Prevalent"],
+                rows,
+                [str, str, str, lambda v: f"{v:.1f}%"]
+            )
+    except Exception as e:
+        print(f"  [SKIP] Control report not available: {e}")
+
+    # Report 5: Care Gap Quarterly
+    cgq_sql = f"""
+    SELECT health_cluster, quarter, prevalent_count, completed_count,
+           gap_count, completion_rate_pct
+    FROM CHI_REPORTING.rpt_{cond}_care_gap_quarterly
+    WHERE sort_order = 0
+    ORDER BY health_cluster, quarter
+    """
+    try:
+        rows = run_query(con, cgq_sql)
+        if rows:
+            subheader(f"{name} — Report 5: Care Gap (Quarterly)")
+            print_table(
+                ["Cluster", "Qtr", "Prevalent", "Completed", "Gaps", "Rate"],
+                rows,
+                [str, str, str, str, str, lambda v: f"{v:.1f}%"]
+            )
+    except Exception as e:
+        print(f"  [SKIP] Care gap quarterly not available: {e}")
+
+    # Report 6: Care Gap Annual
+    cga_sql = f"""
+    SELECT health_cluster,
+           CASE WHEN quarters_completed = '≥ Target' THEN '≥ Target'
+                ELSE CAST(quarters_completed AS VARCHAR) END AS qtrs,
+           patient_count, pct_of_prevalent
+    FROM CHI_REPORTING.rpt_{cond}_care_gap_annual
+    WHERE sort_order = 0
+    ORDER BY health_cluster, sort_key
+    """
+    try:
+        rows = run_query(con, cga_sql)
+        if rows:
+            subheader(f"{name} — Report 6: Care Gap (Annual)")
+            print_table(
+                ["Cluster", "Quarters", "Patients", "% of Prevalent"],
+                rows,
+                [str, str, str, lambda v: f"{v:.1f}%"]
+            )
+    except Exception as e:
+        print(f"  [SKIP] Care gap annual not available: {e}")
 
 
 # ===========================================================================
