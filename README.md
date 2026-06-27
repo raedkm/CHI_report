@@ -1,5 +1,7 @@
 # Community Health Indicators (CHI) — Methodology & Reporting Guide
 
+> **📘 Epidemiological methodology**: For detailed definitions of study design, cohort logic, rate calculations, and clinical thresholds with formulas, see [Epidemiological Methodology](docs/epidemiological_methodology.md).
+
 ## Table of Contents
 
 1. [Overview](#overview)
