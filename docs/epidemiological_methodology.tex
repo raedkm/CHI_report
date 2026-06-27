@@ -1,0 +1,601 @@
+% ============================================================================
+% Epidemiological Methodology --- Community Health Indicators (CHI) Reports
+% ============================================================================
+% Compile:  pdflatex epidemiological_methodology.tex  (×2 for TOC)
+%           Or upload to https://overleaf.com (free, instant compile)
+% ============================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage{caption}
+\usepackage{longtable}
+\usepackage{array}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    urlcolor=blue!60!black,
+    citecolor=blue!60!black
+}
+
+% ── Styling ────────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Community Health Indicators --- Epidemiological Methodology}
+\fancyhead[R]{\small CHI Report Views}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{\textbf{Epidemiological Methodology}\\[4pt]
+       \large Community Health Indicators (CHI) Report Views}
+\author{%
+    \small CHI Reporting Project\\
+    \small Data Source: NMR.LEANHIS EMR Schema (Snowflake)
+}
+\date{\small \today}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent
+This document defines the epidemiological methods underpinning the Community Health Indicators (CHI) reporting system. Three report types---monthly screening coverage, annual point prevalence, and monthly incidence---are derived from a common patient-month analytical grain across four chronic conditions: Diabetes Mellitus (DM), Hypertension (HTN), Dyslipidemia (DLP), and Obesity (OB). We describe the study design, cohort definitions, at-risk population dynamics, rate calculation formulas, clinical classification thresholds, health cluster stratification, and the assumptions and limitations of each measure. The document serves as the methodological reference for analysts, epidemiologists, and public health practitioners interpreting CHI report outputs.
+\end{abstract}
+
+\vspace{12pt}
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Study Design}
+% ============================================================================
+
+\subsection{Design Type}
+Retrospective cohort study using electronic medical record (EMR) data from the \texttt{NMR.LEANHIS} Snowflake schema.
+
+\subsection{Observation Period}
+One calendar year (January 1 -- December 31), configurable via the \texttt{CHI\_REPORTING.chi\_config} parameter table. Changing the report year requires updating a single row; all downstream views reference this configuration.
+
+\subsection{Unit of Analysis}
+The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly observations. The patient-month is the analytical grain from which all three epidemiological measures (screening, prevalence, incidence) are derived.
+
+\subsection{Data Sources}
+
+\begin{table}[ht]
+\centering\small
+\caption{Source EMR tables and their role in the CHI pipeline}
+\begin{tabular}{@{}p{0.28\textwidth} p{0.32\textwidth} p{0.32\textwidth}@{}}
+\toprule
+\textbf{Table} & \textbf{Content} & \textbf{Used By} \\
+\midrule
+\texttt{PATIENTS} & Demographics, vital status & Cohort eligibility \\
+\texttt{PATIENTVISITS} & Encounter dates & Monthly visit detection \\
+\texttt{LABRESULTS} / \texttt{LABRESULTS\_RESULTVALUES} & Laboratory test results & DM, DLP screening \\
+\texttt{OBSERVATIONS} / \texttt{OBSERVATIONS\_OBSERVATIONVALUES} & Clinical observations (vitals) & All four conditions \\
+\texttt{DIAGNOSIS\_CODES} & ICD-10 diagnosis records & Cohort classification, incidence detection \\
+\texttt{PHC\_ASSIGNMENT} & Health cluster assignment & Stratification dimension \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Population Eligibility}
+% ============================================================================
+
+A patient is included in the \textbf{total population} for report year $Y$ if they meet \textbf{all} of the following criteria at January 1 of year $Y$:
+
+\begin{enumerate}[label=\textbf{C\arabic*}, leftmargin=*]
+    \item \textbf{Age}: $> 18$ years at January 1. Pediatric thresholds differ for most chronic conditions and are outside the scope of this reporting system.
+    \item \textbf{National ID}: Present and non-empty in the EMR. Ensures patient identity is verified and excludes transient or tourist encounters.
+    \item \textbf{Vital status}: Alive at January 1 (no death record with a date before the report start). Deceased patients cannot contribute person-time during the report year.
+\end{enumerate}
+
+Patients meeting all three criteria are flagged $\text{is\_in\_total\_population} = \text{TRUE}$. This flag is evaluated once per report year and does \textit{not} change month-to-month. A patient who dies during the year remains in the denominator for that year's prevalence calculation (consistent with standard point prevalence methodology).
+
+% ============================================================================
+\section{Cohort Definitions}
+% ============================================================================
+
+From the total population, two mutually exclusive cohorts are derived based on diagnosis history:
+
+\begin{center}
+\begin{tabular}{c}
+\textbf{TOTAL POPULATION} (eligible at Jan 1) \\
+$\downarrow$ \\
+\begin{tabular}{p{0.42\textwidth} p{0.42\textwidth}}
+\quad \textbf{PREVALENT COHORT} & \quad \textbf{AT-RISK COHORT} \\
+\quad $\geq 1$ diagnosis in the condition's & \quad No diagnosis in the condition's \\
+\quad ICD-10 code set (any date) & \quad ICD-10 code set \\
+\quad $\rightarrow$ Excluded from at-risk pool & \quad $\rightarrow$ Denominator for screening \\
+\quad $\rightarrow$ Counted in prevalence numerator & \quad \quad and incidence reports \\
+\end{tabular}
+\end{tabular}
+\end{center}
+
+\subsection{Prevalent Cohort}
+
+A patient is \textbf{prevalent} if they have \textit{any} ICD-10 code in the condition's code set, regardless of whether it is the primary target code.
+
+\begin{table}[ht]
+\centering
+\caption{ICD-10 code sets and target codes by condition}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Condition} & \textbf{ICD-10 Code Set (Prevalent)} & \textbf{Target Code (Incidence)} \\
+\midrule
+Diabetes Mellitus (DM) & E10, E11, E13, E14, O24 & E11 \\
+Hypertension (HTN) & I10, I11, I12, I13, I15 & I10 \\
+Dyslipidemia (DLP) & E78 & E78 \\
+Obesity (OB) & E66 & E66 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Rationale for broader code set in DM.}
+A patient with Type 1 diabetes (E10) or gestational diabetes (O24) is already a known diabetic---screening them for Type 2 DM makes no clinical sense. The at-risk pool should exclude all known diabetics. However, incidence tracking focuses specifically on Type 2 (E11) because it is the preventable, lifestyle-related form that public health programs target.
+
+\subsection{At-Risk Cohort}
+
+\begin{equation}
+\text{AT-RISK} = \text{TOTAL POPULATION} - \text{PREVALENT COHORT}
+\end{equation}
+
+The at-risk cohort includes:
+\begin{itemize}
+    \item Patients with \textbf{no diagnosis} in the condition's code set before the report year
+    \item Patients with \textbf{prediabetes} or abnormal screening results who lack a formal ICD-10 diagnosis
+    \item Patients who have \textbf{never been screened}
+\end{itemize}
+
+\subsection{Dynamic Cohort Membership}
+
+Cohort assignment is \textbf{not static} across the year. The at-risk pool shrinks month-by-month as patients receive their first diagnosis and transition to the prevalent cohort. The staging system evaluates $\text{is\_at\_risk\_start}$ at each month boundary, not once at the start of the year.
+
+\begin{figure}[ht]
+\centering
+\begin{tabular}{ccccccccccccccc}
+ & & \multicolumn{2}{c}{$\xleftarrow{\text{Incident in Mar}}$} \\
+Jan & -- & Feb & -- & Mar & -- & Apr & -- & May & -- & Jun & -- & $\cdots$ & -- & Dec \\[6pt]
+\multicolumn{15}{c}{At-risk at Jan 1: 13 patients \hspace{2cm} At-risk at Dec 1: 10 patients}
+\end{tabular}
+\caption{Dynamic at-risk population across the report year. A patient diagnosed in March leaves the at-risk pool for April--December.}
+\end{figure}
+
+% ============================================================================
+\section{The At-Risk Population}
+% ============================================================================
+
+\subsection{Definition}
+
+For month $M$:
+
+\begin{equation}
+\text{is\_at\_risk\_start}(M) =
+\begin{cases}
+\text{TRUE} & \text{if patient is in TOTAL POPULATION} \\
+            & \text{AND has no diagnosis in the condition's ICD-10 set} \\
+            & \text{with diagnosis date} < \text{first day of month } M \\[4pt]
+\text{FALSE} & \text{otherwise}
+\end{cases}
+\end{equation}
+
+\subsection{Why Monthly Evaluation?}
+
+Three epidemiological reasons:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Accurate denominators}. The at-risk population is the denominator for both screening and incidence rates. Using a fixed year-start denominator would overstate the population at risk in later months.
+    \item \textbf{Censoring at diagnosis}. A patient can only be an incident case once. After their first diagnosis, they leave the at-risk pool. The monthly evaluation correctly censors them from subsequent months' denominators.
+    \item \textbf{Time-varying exposure}. Screening behavior changes when patients know they have a condition. A patient diagnosed in March should not be counted as ``at-risk but unscreened'' in November---they are already under management.
+\end{enumerate}
+
+% ============================================================================
+\section{Report 1: Screening (Monthly Coverage)}
+% ============================================================================
+
+\subsection{Epidemiological Question}
+\textit{What proportion of the at-risk population received screening for the condition each month?}
+
+\subsection{Measure Type}
+\textbf{Monthly screening coverage rate}---a process measure reflecting healthcare system reach.
+
+\subsection{Formula}
+
+\begin{equation}
+\text{Screening Rate}_{M} =
+\frac{\text{Patients screened during month } M}
+     {\text{Patients at-risk at start of month } M} \times 100
+\end{equation}
+
+\subsection{Numerator}
+
+A patient is counted as \textbf{screened} in month $M$ if:
+\begin{enumerate}[leftmargin=*]
+    \item They are at-risk at the start of month $M$ ($\text{is\_at\_risk\_start} = \text{TRUE}$), \textbf{and}
+    \item They had the required screening test(s) recorded during month $M$.
+\end{enumerate}
+
+\begin{table}[ht]
+\centering
+\caption{Screening requirements by condition}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Condition} & \textbf{Required Test(s)} & \textbf{Logic} \\
+\midrule
+DM & Fasting Blood Sugar (FBS) \textbf{or} HbA1c & Either test counts \\
+HTN & Systolic BP \textbf{and} Diastolic BP (same visit) & Both must be present \\
+DLP & HDL \textbf{or} LDL & Either lipid component counts \\
+OB & BMI & Single measurement \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Denominator}
+
+The at-risk population at the start of month $M$.
+
+\subsection{Stratification by Result Category}
+
+Screened patients are classified by their \textbf{worst} result (the most clinically concerning marker determines the category):
+
+\begin{table}[ht]
+\centering
+\caption{Screening result categories}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Category} & \textbf{Clinical Meaning} \\
+\midrule
+Normal & All markers within normal range \\
+Elevated & $\geq 1$ marker in borderline range, none abnormal \\
+Abnormal & $\geq 1$ marker in disease-indicating range \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For Obesity, a fourth category exists: \textbf{Underweight} (BMI $< 18.5$).
+
+\subsection{Interpretation Guide}
+
+\begin{itemize}
+    \item \textbf{High screening rate + low abnormal rate}: Effective prevention; population is healthy.
+    \item \textbf{High screening rate + high abnormal rate}: Good detection; high undiagnosed burden exists.
+    \item \textbf{Low screening rate}: Insufficient healthcare reach; disease burden is unknown.
+    \item \textbf{Zero screening}: No data; the at-risk population's status is unknown.
+\end{itemize}
+
+\subsection{Annual Cumulative Rate (Subtotal Rows)}
+
+\begin{equation}
+\text{Cumulative Screening Rate}_{\text{annual}} =
+\frac{\sum_{m=1}^{12} \text{Screened}_m}
+     {\sum_{m=1}^{12} \text{At-Risk}_m} \times 100
+\end{equation}
+
+This is a \textbf{person-month rate}: a patient screened in 3 different months contributes 3 to the numerator and 3 person-months to the denominator. It measures screening \textit{encounters}, not unique patients screened per year.
+
+% ============================================================================
+\section{Report 2: Prevalence (Annual Point Prevalence)}
+% ============================================================================
+
+\subsection{Epidemiological Question}
+\textit{What proportion of the total eligible population had the condition at the end of the report year?}
+
+\subsection{Measure Type}
+\textbf{Point prevalence}---a cross-sectional snapshot as of December 31.
+
+\subsection{Formula}
+
+\begin{equation}
+\text{Prevalence}_{\text{annual}} =
+\frac{\text{Patients with target ICD-10 code at Dec 31}}
+     {\text{Total eligible population at Jan 1}} \times 100
+\end{equation}
+
+\subsection{Numerator}
+
+A patient is counted as \textbf{prevalent} if they have the target ICD-10 code with a diagnosis date $\leq$ December 31 of the report year.
+
+\subsection{Denominator}
+
+The total eligible population at January 1. This denominator is \textbf{fixed} for the year.
+
+\paragraph{Rationale for fixed denominator.}
+Point prevalence is a cross-sectional measure. The January 1 population represents the community at the start of the observation period. Removing patients who die during the year would underestimate prevalence.
+
+\subsection{Sub-Components}
+
+\begin{equation}
+\text{Prevalent} = \text{Pre-existing} + \text{Incident During Year}
+\end{equation}
+
+\begin{table}[ht]
+\centering
+\caption{Prevalence sub-components}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Definition} & \textbf{Clinical Meaning} \\
+\midrule
+Pre-existing & First diagnosis \textbf{before} Jan 1 & Known cases; already under management \\
+Incident during year & First diagnosis \textbf{during} report year & Newly detected cases \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Interpretation}
+
+\begin{itemize}
+    \item Rising prevalence over years may indicate improved detection, increasing disease burden, or both.
+    \item A high ratio of pre-existing to incident cases suggests a mature detection program.
+    \item A high ratio of incident to pre-existing cases suggests either a recent screening push or genuinely increasing disease incidence.
+\end{itemize}
+
+% ============================================================================
+\section{Report 3: Incidence (Monthly Incidence Rate)}
+% ============================================================================
+
+\subsection{Epidemiological Question}
+\textit{At what rate are new cases of the condition developing in the at-risk population?}
+
+\subsection{Measure Type}
+\textbf{Monthly cumulative incidence proportion} and \textbf{annualized incidence rate} (using January baseline).
+
+\subsection{Monthly Formula}
+
+\begin{equation}
+\text{Incidence Rate}_{M} =
+\frac{\text{New cases diagnosed during month } M}
+     {\text{Patients at-risk at start of month } M} \times 100{,}000
+\end{equation}
+
+\subsection{Incident Case Definition}
+
+A patient is an \textbf{incident case} in month $M$ if \textbf{all} of the following are true:
+\begin{enumerate}[leftmargin=*]
+    \item They are at-risk at the start of month $M$ (no prior diagnosis of the target condition).
+    \item They received the \textbf{first-ever} target ICD-10 code during month $M$.
+    \item The diagnosis date falls within the calendar boundaries of month $M$.
+\end{enumerate}
+
+A patient can be incident \textbf{only once}. After their first diagnosis, they are removed from the at-risk pool for all subsequent months.
+
+\subsection{Why Per 100,000?}
+
+Incidence rates are expressed per 100,000 population to produce readable numbers. Monthly incidence of chronic diseases is typically low (a few cases per thousand per month), so per-100,000 scaling avoids small decimals.
+
+\subsection{Annual Incidence Rate (Subtotal Rows)}
+
+\begin{equation}
+\text{Annual Incidence Rate} =
+\frac{\sum_{m=1}^{12} \text{Incident Cases}_m}
+     {\text{At-Risk Population at January}} \times 100{,}000
+\end{equation}
+
+\paragraph{Rationale for January denominator.}
+Using a fixed baseline (the population at risk on January 1) provides a stable denominator for comparison across clusters and years. Summing monthly denominators would make later months' cases appear more concentrated as the at-risk pool shrinks. The January baseline answers: \textit{Of the population at risk on January 1, how many developed the condition during the year?}
+
+% ============================================================================
+\section{Monthly vs.\ Annual Rate Calculations}
+% ============================================================================
+
+\begin{table}[ht]
+\centering
+\caption{Comparison of monthly and annual rate calculation methods}
+\begin{tabular}{@{}p{0.22\textwidth} p{0.35\textwidth} p{0.35\textwidth}@{}}
+\toprule
+\textbf{Aspect} & \textbf{Monthly Rate} & \textbf{Annual Rate (Subtotal/Grand Total)} \\
+\midrule
+Denominator & At-risk at month start (varies each month) & January at-risk (fixed baseline) \\
+Numerator & Cases/events in that specific month & Sum of all monthly cases/events \\
+Interpretation & ``This month, $X$ per 100,000 at-risk developed the condition'' & ``Of those at risk on Jan 1, $X$ per 100,000 developed the condition during the year'' \\
+Use case & Monitoring month-to-month variation, seasonal patterns & Comparing across clusters, facilities, or years \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Worked Example}
+
+Using the DM simulation data:
+
+\begin{table}[ht]
+\centering
+\caption{Illustration of monthly vs.\ annual incidence rates}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Month} & \textbf{At-Risk Start} & \textbf{New Cases} & \textbf{Monthly Rate (per 100k)} \\
+\midrule
+Jan  & 13 & 0 & 0 \\
+Feb  & 13 & 1 & 7,692 \\
+Mar  & 12 & 1 & 8,333 \\
+Jun  & 11 & 1 & 9,091 \\
+Dec  & 10 & 1 & 10,000 \\
+\midrule
+\textbf{Annual} & \textbf{13 (Jan)} & \textbf{4 (total)} & \textbf{30,769} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The monthly rate rises across the year (0 $\rightarrow$ 10,000) even with a constant 1 case/month because the denominator shrinks. The annual rate (30,769 per 100k) uses the fixed January denominator of 13 to provide a single, comparable number.
+
+% ============================================================================
+\section{Health Cluster Stratification}
+% ============================================================================
+
+\subsection{Rationale}
+Health clusters represent organizational units (geographic regions, facility catchments, or care networks). Stratifying epidemiological measures by cluster answers:
+\begin{itemize}
+    \item Are some clusters screening more effectively than others?
+    \item Is disease burden concentrated in specific clusters?
+    \item Are new cases appearing at different rates across clusters?
+    \item Which clusters have patients with no PHC assignment?
+\end{itemize}
+
+\subsection{Method}
+Health cluster is a \textbf{patient-level attribute} from \texttt{NMR.LEANHIS.PHC\_ASSIGNMENT}. It is attached at the cohort level and flows through to all reports:
+
+\begin{equation}
+\text{Metric}_{\text{cluster}} =
+\frac{\text{Numerator}_{\text{cluster}}}
+     {\text{Denominator}_{\text{cluster}}} \times \text{Scaling Factor}
+\end{equation}
+
+Each cluster's rate is calculated independently using that cluster's own numerator and denominator. The grand total row sums across all clusters.
+
+\subsection{Unassigned Patients}
+Patients with no PHC record are labeled `Unassigned' and reported as a separate group. This is methodologically important: if unassigned patients have systematically different screening rates or disease burden, it may indicate a data quality issue or a genuinely underserved population.
+
+% ============================================================================
+\section{Clinical Classification Thresholds}
+% ============================================================================
+
+\subsection{Diabetes Mellitus}
+
+Screening category = $\max(\text{FBS\_category}, \text{A1C\_category})$. FBS auto-detects units by value range ($< 30$ = mmol/L, $\geq 30$ = mg/dL).
+
+\begin{table}[ht]
+\centering
+\caption{DM classification thresholds}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Category} & \textbf{FBS (mmol/L)} & \textbf{FBS (mg/dL)} & \textbf{HbA1c (\%)} \\
+\midrule
+Normal   & $\leq 5.5$    & $\leq 99$    & $< 5.7$ \\
+Elevated & $5.6$--$6.9$  & $100$--$125$ & $5.7$--$6.4$ \\
+Abnormal & $> 6.9$       & $> 125$      & $> 6.4$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Hypertension (ACC/AHA 2017)}
+
+SYS and DIA must be \textbf{paired from the same visit}. Classification = worst of SYS or DIA.
+
+\begin{table}[ht]
+\centering
+\caption{HTN classification thresholds}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Category} & \textbf{Systolic (mmHg)} & \textbf{Diastolic (mmHg)} \\
+\midrule
+Normal   & $< 120$ \textbf{and} $< 80$ \\
+Elevated & $120$--$129$ \textbf{or} $80$--$89$ \\
+Abnormal & $\geq 130$ \textbf{or} $\geq 90$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dyslipidemia}
+
+Screening category = $\max(\text{HDL}, \text{Triglyceride}, \text{Cholesterol}, \text{LDL})$.
+
+\textbf{HDL} (gender-specific; no ``elevated'' tier):
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Gender} & \textbf{Normal} & \textbf{Abnormal} \\
+\midrule
+Male   & $\geq 40$ & $< 40$ \\
+Female & $\geq 50$ & $< 50$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Triglyceride, Cholesterol, LDL}:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Marker} & \textbf{Normal} & \textbf{Elevated} & \textbf{Abnormal} \\
+\midrule
+Triglyceride      & $< 150$ & $150$--$199$ & $\geq 200$ \\
+Total Cholesterol & $< 200$ & $200$--$239$ & $\geq 240$ \\
+LDL               & $< 130$ & $130$--$159$ & $\geq 160$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Obesity (WHO BMI)}
+
+\begin{table}[ht]
+\centering
+\caption{Obesity classification thresholds}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Category} & \textbf{BMI (kg/m}$^2$\textbf{)} \\
+\midrule
+Underweight           & $< 18.5$ \\
+Normal                & $18.5$--$24.9$ \\
+Elevated (Overweight) & $25.0$--$29.9$ \\
+Abnormal (Obese)      & $\geq 30.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+BMI values $< 10$ or $> 80$ are excluded as clinically implausible (likely data entry errors).
+
+% ============================================================================
+\section{Assumptions \& Limitations}
+% ============================================================================
+
+\subsection{Assumptions}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{A\arabic*}]
+    \item \textbf{Complete diagnosis capture}. It is assumed that all diagnoses are recorded in the EMR with accurate ICD-10 codes and dates. Undiagnosed patients are misclassified as at-risk.
+    \item \textbf{Lab result accuracy}. Screening classifications assume lab/observation values are correctly recorded. Transcription errors (e.g., mg/dL entered as mmol/L) may cause misclassification. The DM dual-unit auto-detection mitigates but does not eliminate this.
+    \item \textbf{PHC assignment completeness}. Patients without a PHC record are assumed to be genuinely unassigned, not the result of a data integration gap.
+    \item \textbf{Visit-date alignment}. Lab results and observations are attributed to the month of the associated patient visit, not the date the result was entered or verified.
+    \item \textbf{No loss to follow-up}. Patients who leave the catchment area but have no death record are assumed to remain in the population. This may overstate the denominator.
+\end{enumerate}
+
+\subsection{Limitations}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{L\arabic*}]
+    \item \textbf{Screening $\neq$ diagnosis}. A patient with an abnormal screening result does not necessarily have the disease. The screening report measures test coverage and results, not confirmed diagnoses.
+    \item \textbf{First diagnosis $\neq$ disease onset}. The incidence measure captures the date a diagnosis was \textit{recorded}, not the date the disease \textit{developed}. A patient diagnosed with E11 in June may have had undiagnosed diabetes for years.
+    \item \textbf{Screening encounter double-counting}. The annual cumulative screening rate counts screening \textit{events}, not unique patients. A patient screened every month contributes 12 to the numerator. This metric measures testing volume, not the proportion of the population ever screened.
+    \item \textbf{Denominator stability in small clusters}. For small health clusters, a single incident case can produce a very high rate (e.g., 1 case / 2 at-risk = 50,000 per 100k). Rates for clusters with $< 5$ at-risk patients should be interpreted with caution.
+    \item \textbf{ICD-10 coding variability}. Different clinicians may code the same condition differently. A patient with Type 2 diabetes coded as E14 (unspecified DM) would be counted in the prevalent cohort for screening/incidence exclusion but not in the E11-specific prevalence numerator.
+    \item \textbf{Cross-sectional prevalence denominator}. The prevalence denominator is fixed at January 1. Patients who turn 18, receive a National ID, or immigrate into the catchment during the year are not captured.
+\end{enumerate}
+
+% ============================================================================
+\section{Reference: Rate Formulas}
+% ============================================================================
+
+\begin{table}[ht]
+\centering
+\caption{Summary of all rate formulas}
+\begin{tabular}{@{}p{0.22\textwidth} p{0.37\textwidth} p{0.37\textwidth}@{}}
+\toprule
+\textbf{Report} & \textbf{Detail Row Formula} & \textbf{Subtotal / Grand Total Formula} \\
+\midrule
+Screening &
+$\dfrac{\text{Screened}_m}{\text{At-Risk}_m} \times 100$ &
+$\dfrac{\sum\text{Screened}_m}{\sum\text{At-Risk}_m} \times 100$ (cumulative) \\[16pt]
+Prevalence &
+--- (annual only) &
+$\dfrac{\text{Prevalent}_{\text{Dec 31}}}{\text{Total Pop}_{\text{Jan 1}}} \times 100$ \\[16pt]
+Incidence &
+$\dfrac{\text{New Cases}_m}{\text{At-Risk}_m} \times 100{,}000$ &
+$\dfrac{\sum\text{New Cases}_m}{\text{At-Risk}_{\text{Jan}}} \times 100{,}000$ (annualized) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Where $m = 1, 2, \dots, 12$ (calendar month).
+
+\end{document}
