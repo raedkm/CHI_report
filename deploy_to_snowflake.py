@@ -32,6 +32,10 @@ DEPLOY_ORDER = [
     ("10_OB_Staging",           os.path.join(QUERIES_DIR, "OBS", "ob_staging_views.sql")),
     ("11_OB_Analytical",        os.path.join(QUERIES_DIR, "OBS", "ob_analytical_view.sql")),
     ("12_OB_Reports",           os.path.join(QUERIES_DIR, "OBS", "ob_report_views.sql")),
+    ("13_DM_Monitoring",        os.path.join(QUERIES_DIR, "Diabetes", "dm_monitoring_views.sql")),
+    ("14_HTN_Monitoring",       os.path.join(QUERIES_DIR, "HTN", "htn_monitoring_views.sql")),
+    ("15_DLP_Monitoring",       os.path.join(QUERIES_DIR, "DLP", "dlp_monitoring_views.sql")),
+    ("16_OB_Monitoring",        os.path.join(QUERIES_DIR, "OBS", "ob_monitoring_views.sql")),
 ]
 
 
@@ -47,18 +51,18 @@ def build_sql(year):
     lines.append("--   snowsql -f chi_reporting_deploy.sql")
     lines.append("--")
     lines.append("-- DEPLOYMENT ORDER:")
-    lines.append("--   1. Config (schema + year parameter)")
-    lines.append("--   2. DM  — Staging → Analytical → Reports")
-    lines.append("--   3. HTN — Staging → Analytical → Reports")
-    lines.append("--   4. DLP — Staging → Analytical → Reports")
-    lines.append("--   5. OB  — Staging → Analytical → Reports")
+    lines.append("--   1. Config (schema + year + thresholds)")
+    lines.append("--   2. DM  — Staging → Analytical → Reports → Monitoring")
+    lines.append("--   3. HTN — Staging → Analytical → Reports → Monitoring")
+    lines.append("--   4. DLP — Staging → Analytical → Reports → Monitoring")
+    lines.append("--   5. OB  — Staging → Analytical → Reports → Monitoring")
     lines.append("-- ============================================================================")
     lines.append("")
 
     for i, (label, path) in enumerate(DEPLOY_ORDER):
         lines.append("")
         lines.append(f"-- {'=' * 70}")
-        lines.append(f"-- STEP {i + 1}/13: {label}")
+        lines.append(f"-- STEP {i + 1}/17: {label}")
         lines.append(f"-- {'=' * 70}")
         lines.append("")
 
@@ -74,7 +78,7 @@ def build_sql(year):
             lines.append(sql)
             lines.append("")
         except FileNotFoundError:
-            lines.append(f"-- ⚠ WARNING: File not found: {path}")
+            lines.append(f"-- [WARNING] File not found: {path}")
             lines.append("")
 
     return "\n".join(lines)
@@ -101,9 +105,9 @@ if __name__ == "__main__":
     if output_file:
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(sql)
-        print(f"✓ Deploy SQL written to: {output_file}")
+        print(f"[OK] Deploy SQL written to: {output_file}")
         print(f"  Report year: {year}")
-        print(f"  13 views across 4 conditions (DM, HTN, DLP, OB)")
+        print(f"  33 views across 4 conditions (DM, HTN, DLP, OB) incl. compliance & care gap")
         print(f"\n  Deploy in Snowflake:")
         print(f"    snowsql -f {output_file}")
         print(f"  Or copy-paste into a Snowflake worksheet.")
