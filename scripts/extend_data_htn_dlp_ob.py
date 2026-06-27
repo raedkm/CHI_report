@@ -9,7 +9,7 @@ Run after generate_synthetic_data.py.
 import duckdb
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "chi_sim.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "chi_sim.db")
 con = duckdb.connect(DB_PATH)
 
 # Tables already exist. We're adding new lab/observation records.

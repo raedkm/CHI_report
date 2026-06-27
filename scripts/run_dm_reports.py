@@ -20,7 +20,7 @@ Adapted from dm_reports.sql with DuckDB dialect substitutions:
 import duckdb
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "chi_sim.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "chi_sim.db")
 con = duckdb.connect(DB_PATH)
 
 print("=" * 70)

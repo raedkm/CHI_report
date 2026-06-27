@@ -3,14 +3,14 @@ create_views_in_duckdb.py
 =========================
 Creates CHI_REPORTING views in chi_sim.db matching the Snowflake views.
 Each view is independently queryable for debugging.
-Run: uv run python data/create_views_in_duckdb.py
+Run: uv run python scripts/create_views_in_duckdb.py
 """
 import duckdb
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
-DB = os.path.join(os.path.dirname(__file__), "chi_sim.db")
+DB = os.path.join(os.path.dirname(__file__), "..", "data", "chi_sim.db")
 con = duckdb.connect(DB)
 
 # Reset

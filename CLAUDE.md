@@ -189,17 +189,17 @@ All report tables include:
 
 ## DuckDB Simulation
 
-Local development/testing uses DuckDB. The simulation database and runners are in `data/`:
+Local development/testing uses DuckDB. The simulation database is in `data/`; Python scripts are in `scripts/`:
 
 | File | Purpose |
 |------|---------|
 | `data/chi_sim.db` | DuckDB database (20 synthetic patients, 2025 data) |
-| `data/generate_synthetic_data.py` | Creates base DM data |
-| `data/extend_data_htn_dlp_ob.py` | Adds HTN/DLP/OB data to the simulation |
-| `data/run_all_reports.py` | Config-driven runner for all 4 conditions |
-| `data/pyproject.toml` | uv project config (`uv run python ...`) |
+| `scripts/generate_synthetic_data.py` | Creates base DM data |
+| `scripts/extend_data_htn_dlp_ob.py` | Adds HTN/DLP/OB data to the simulation |
+| `scripts/create_views_in_duckdb.py` | Creates all 24 CHI_REPORTING views (DuckDB dialect) |
+| `scripts/run_all_reports.py` | Config-driven runner for all 4 conditions |
 
-Usage: `uv run python data/run_all_reports.py [dm|htn|dlp|ob|all]`
+Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|all]`
 
 ### DuckDB → Snowflake Dialect Mapping
 

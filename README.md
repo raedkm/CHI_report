@@ -423,18 +423,16 @@ ORDER BY health_cluster, sort_order, sort_key;
 A local DuckDB simulation with 20 synthetic patients is available for development and testing:
 
 ```bash
-cd data
-
-# Generate synthetic data (creates chi_sim.db)
-uv run python generate_synthetic_data.py
-uv run python extend_data_htn_dlp_ob.py
+# Generate synthetic data (creates data/chi_sim.db)
+uv run python scripts/generate_synthetic_data.py
+uv run python scripts/extend_data_htn_dlp_ob.py
 
 # Create all views (mirrors the Snowflake deployment)
-uv run python create_views_in_duckdb.py
+uv run python scripts/create_views_in_duckdb.py
 
 # Run reports
-uv run python run_all_reports.py all
-# Or: uv run python run_all_reports.py dm
+uv run python scripts/run_all_reports.py all
+# Or: uv run python scripts/run_all_reports.py dm
 ```
 
 ### Simulation Data Profile
@@ -492,11 +490,15 @@ CHI_Report/
 │       ├── ob_analytical_view.sql
 │       └── ob_report_views.sql
 │
+├── pyproject.toml                               ← Python project config
+├── deploy_to_snowflake.py                       ← Deployment script generator
+│
+├── scripts/
+│   ├── generate_synthetic_data.py                ← Creates 20-patient dataset
+│   ├── extend_data_htn_dlp_ob.py                ← Adds HTN/DLP/OB data
+│   ├── create_views_in_duckdb.py                ← All 24 views (DuckDB dialect)
+│   └── run_all_reports.py                       ← Dynamic SQL runner
+│
 └── data/
-    ├── chi_sim.db                         ← DuckDB simulation database
-    ├── generate_synthetic_data.py          ← Creates 20-patient dataset
-    ├── extend_data_htn_dlp_ob.py          ← Adds HTN/DLP/OB data
-    ├── create_views_in_duckdb.py          ← All 24 views (DuckDB dialect)
-    ├── run_all_reports.py                 ← Dynamic SQL runner
-    └── pyproject.toml                     ← Python project config
+    └── chi_sim.db                               ← DuckDB simulation database
 ```

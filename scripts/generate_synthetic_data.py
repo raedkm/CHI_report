@@ -23,7 +23,7 @@ import duckdb
 import os
 from datetime import date, timedelta
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "chi_sim.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "chi_sim.db")
 
 # Remove existing DB so we start fresh
 if os.path.exists(DB_PATH):

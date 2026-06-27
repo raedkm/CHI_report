@@ -5,13 +5,13 @@ Runs all 4 condition reports (DM, HTN, DLP, Obesity) against chi_sim.db.
 Each condition produces 3 reports: Screening (monthly), Prevalence (annual), Incidence (monthly).
 
 Usage:
-    uv run python run_all_reports.py [condition]
+    uv run python scripts/run_all_reports.py [condition]
 
     condition: dm | htn | dlp | ob | all (default: all)
 """
 import duckdb, os, sys
 
-DB = os.path.join(os.path.dirname(__file__), "chi_sim.db")
+DB = os.path.join(os.path.dirname(__file__), "..", "data", "chi_sim.db")
 
 # ===========================================================================
 # SHARED HELPERS
