@@ -95,8 +95,7 @@ All views reference `CHI_REPORTING.chi_config` (a single-row table) via `CROSS J
 | File | Purpose |
 |------|---------|
 | `Diabetes Indicators.docx` | Logic flow diagrams (source of truth for all conditions) |
-| [conceptual_map_dm.md](conceptual_map_dm.md) | Cohort definitions, 3-report logic flow, ICD-10/lab reference for DM |
-| [table_definitions_dm.md](table_definitions_dm.md) | All staging and report table schemas with column names and types |
+| [docs/epidemiological_methodology.md](docs/epidemiological_methodology.md) | Cohort definitions, 6-report methodology (Screening, Prevalence, Incidence, Control, Care Gap Q, Care Gap Annual), screening & control thresholds, assumptions/limitations for all 4 conditions |
 
 ### Monolithic SQL files (legacy reference)
 

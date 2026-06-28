@@ -477,9 +477,10 @@ uv run python scripts/run_all_reports.py all
 CHI_Report/
 ├── README.md                              ← This file
 ├── CLAUDE.md                              ← AI assistant instructions
-├── conceptual_map_dm.md                   ← DM cohort definitions & logic flow
 ├── deploy_to_snowflake.py                 ← Deployment script generator
 ├── chi_reporting_deploy.sql               ← Generated deploy file
+├── docs/
+│   └── epidemiological_methodology.md     ← Full methodology (Module 1 + Module 2, all 4 conditions)
 │
 ├── project_queries/
 │   ├── 00_config.sql                      ← Schema + config table
