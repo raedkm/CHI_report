@@ -21,6 +21,7 @@
 \usepackage{caption}
 \usepackage{longtable}
 \usepackage{array}
+\usepackage{multirow}
 
 \hypersetup{
     colorlinks=true,
@@ -51,7 +52,14 @@
 
 \begin{abstract}
 \noindent
-This document defines the epidemiological methods underpinning the Community Health Indicators (CHI) reporting system. Three report types---monthly screening coverage, annual point prevalence, and monthly incidence---are derived from a common patient-month analytical grain across four chronic conditions: Diabetes Mellitus (DM), Hypertension (HTN), Dyslipidemia (DLP), and Obesity (OB). We describe the study design, cohort definitions, at-risk population dynamics, rate calculation formulas, clinical classification thresholds, health cluster stratification, and the assumptions and limitations of each measure. The document serves as the methodological reference for analysts, epidemiologists, and public health practitioners interpreting CHI report outputs.
+This document defines the epidemiological methods underpinning the Community Health Indicators (CHI) reporting system. The system is organized into two methodologically distinct modules built on a common patient-month analytical grain across four chronic conditions: Diabetes Mellitus (DM), Hypertension (HTN), Dyslipidemia (DLP), and Obesity (OB).
+
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+    \item \textbf{Module 1 --- Epidemiological Surveillance} answers \textit{how much disease exists and how fast is it appearing?} using three report types: monthly screening coverage, annual point prevalence, and monthly incidence. Base population: \textbf{at-risk} cohort (undiagnosed). Thresholds: \textit{screening} cut-points.
+    \item \textbf{Module 2 --- Compliance \& Care Gap} answers \textit{of those with disease, how well are we managing them and closing follow-up gaps?} using three report types: annual disease control classification, quarterly follow-up completion, and annual care-gap distribution. Base population: \textbf{prevalent} cohort (diagnosed). Thresholds: \textit{control} targets.
+\end{itemize}
+
+We describe the study design, cohort definitions, at-risk population dynamics, screening and control thresholds, rate calculation formulas, health cluster stratification, and the assumptions and limitations of each measure. The document serves as the methodological reference for analysts, epidemiologists, and public health practitioners interpreting CHI report outputs.
 \end{abstract}
 
 \vspace{12pt}
@@ -69,7 +77,7 @@ Retrospective cohort study using electronic medical record (EMR) data from the \
 One calendar year (January 1 -- December 31), configurable via the \texttt{CHI\_REPORTING.chi\_config} parameter table. Changing the report year requires updating a single row; all downstream views reference this configuration.
 
 \subsection{Unit of Analysis}
-The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly observations. The patient-month is the analytical grain from which all three epidemiological measures (screening, prevalence, incidence) are derived.
+The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly observations. The patient-month is the analytical grain from which all six epidemiological measures --- screening, prevalence, incidence (Module~1) and control, quarterly care gap, annual care gap (Module~2) --- are derived.
 
 \subsection{Data Sources}
 
@@ -82,10 +90,10 @@ The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly o
 \midrule
 \texttt{PATIENTS} & Demographics, vital status & Cohort eligibility \\
 \texttt{PATIENTVISITS} & Encounter dates & Monthly visit detection \\
-\texttt{LABRESULTS} / \texttt{LABRESULTS\_RESULTVALUES} & Laboratory test results & DM, DLP screening \\
+\texttt{LABRESULTS} / \texttt{LABRESULTS\_RESULTVALUES} & Laboratory test results & DM, DLP screening \& control \\
 \texttt{OBSERVATIONS} / \texttt{OBSERVATIONS\_OBSERVATIONVALUES} & Clinical observations (vitals) & All four conditions \\
 \texttt{DIAGNOSIS\_CODES} & ICD-10 diagnosis records & Cohort classification, incidence detection \\
-\texttt{PHC\_ASSIGNMENT} & Health cluster assignment & Stratification dimension \\
+\texttt{PHC\_ASSIGNMENT} & Health cluster assignment & Stratification dimension (both modules) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -108,7 +116,7 @@ Patients meeting all three criteria are flagged $\text{is\_in\_total\_population
 \section{Cohort Definitions}
 % ============================================================================
 
-From the total population, two mutually exclusive cohorts are derived based on diagnosis history:
+From the total population, two mutually exclusive cohorts are derived based on diagnosis history. These cohorts underpin both modules of the CHI reporting system:
 
 \begin{center}
 \begin{tabular}{c}
@@ -118,15 +126,21 @@ $\downarrow$ \\
 \quad \textbf{PREVALENT COHORT} & \quad \textbf{AT-RISK COHORT} \\
 \quad $\geq 1$ diagnosis in the condition's & \quad No diagnosis in the condition's \\
 \quad ICD-10 code set (any date) & \quad ICD-10 code set \\
-\quad $\rightarrow$ Excluded from at-risk pool & \quad $\rightarrow$ Denominator for screening \\
-\quad $\rightarrow$ Counted in prevalence numerator & \quad \quad and incidence reports \\
+\quad $\rightarrow$ Module 2 base population & \quad $\rightarrow$ Module 1 screening \\
+\quad \quad (Reports 4--6) & \quad \quad and incidence denominator \\
+\quad $\rightarrow$ Module 1 prevalence numerator & \\
 \end{tabular}
 \end{tabular}
 \end{center}
 
 \subsection{Prevalent Cohort}
 
-A patient is \textbf{prevalent} if they have \textit{any} ICD-10 code in the condition's code set, regardless of whether it is the primary target code.
+A patient is \textbf{prevalent} if they have \textit{any} ICD-10 code in the condition's code set, regardless of whether it is the primary target code. This cohort is the base population for:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Module 1} --- Report 2 (Prevalence numerator)
+    \item \textbf{Module 2} --- Reports 4, 5, 6 (denominator of all care-gap and control metrics)
+\end{itemize}
 
 \begin{table}[ht]
 \centering
@@ -152,8 +166,8 @@ A patient with Type 1 diabetes (E10) or gestational diabetes (O24) is already a 
 \text{AT-RISK} = \text{TOTAL POPULATION} - \text{PREVALENT COHORT}
 \end{equation}
 
-The at-risk cohort includes:
-\begin{itemize}
+The at-risk cohort is used \textbf{only by Module 1} (Reports 1 and 3) and includes:
+\begin{itemize}[leftmargin=*]
     \item Patients with \textbf{no diagnosis} in the condition's code set before the report year
     \item Patients with \textbf{prediabetes} or abnormal screening results who lack a formal ICD-10 diagnosis
     \item Patients who have \textbf{never been screened}
@@ -161,7 +175,7 @@ The at-risk cohort includes:
 
 \subsection{Dynamic Cohort Membership}
 
-Cohort assignment is \textbf{not static} across the year. The at-risk pool shrinks month-by-month as patients receive their first diagnosis and transition to the prevalent cohort. The staging system evaluates $\text{is\_at\_risk\_start}$ at each month boundary, not once at the start of the year.
+Cohort assignment is \textbf{not static} across the year. The at-risk pool shrinks month-by-month as patients receive their first diagnosis and transition to the prevalent cohort. The staging system evaluates $\text{is\_at\_risk\_start}$ at each month boundary, not once at the start of the year. This dynamic evaluation is relevant only to Module 1; Module 2's base population is fixed at a single reference date (see §7.0).
 
 \begin{figure}[ht]
 \centering
@@ -202,262 +216,10 @@ Three epidemiological reasons:
 \end{enumerate}
 
 % ============================================================================
-\section{Report 1: Screening (Monthly Coverage)}
+\section{Screening Thresholds}
 % ============================================================================
 
-\subsection{Epidemiological Question}
-\textit{What proportion of the at-risk population received screening for the condition each month?}
-
-\subsection{Measure Type}
-\textbf{Monthly screening coverage rate}---a process measure reflecting healthcare system reach.
-
-\subsection{Formula}
-
-\begin{equation}
-\text{Screening Rate}_{M} =
-\frac{\text{Patients screened during month } M}
-     {\text{Patients at-risk at start of month } M} \times 100
-\end{equation}
-
-\subsection{Numerator}
-
-A patient is counted as \textbf{screened} in month $M$ if:
-\begin{enumerate}[leftmargin=*]
-    \item They are at-risk at the start of month $M$ ($\text{is\_at\_risk\_start} = \text{TRUE}$), \textbf{and}
-    \item They had the required screening test(s) recorded during month $M$.
-\end{enumerate}
-
-\begin{table}[ht]
-\centering
-\caption{Screening requirements by condition}
-\begin{tabular}{@{}lll@{}}
-\toprule
-\textbf{Condition} & \textbf{Required Test(s)} & \textbf{Logic} \\
-\midrule
-DM & Fasting Blood Sugar (FBS) \textbf{or} HbA1c & Either test counts \\
-HTN & Systolic BP \textbf{and} Diastolic BP (same visit) & Both must be present \\
-DLP & HDL \textbf{or} LDL & Either lipid component counts \\
-OB & BMI & Single measurement \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Denominator}
-
-The at-risk population at the start of month $M$.
-
-\subsection{Stratification by Result Category}
-
-Screened patients are classified by their \textbf{worst} result (the most clinically concerning marker determines the category):
-
-\begin{table}[ht]
-\centering
-\caption{Screening result categories}
-\begin{tabular}{@{}ll@{}}
-\toprule
-\textbf{Category} & \textbf{Clinical Meaning} \\
-\midrule
-Normal & All markers within normal range \\
-Elevated & $\geq 1$ marker in borderline range, none abnormal \\
-Abnormal & $\geq 1$ marker in disease-indicating range \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-For Obesity, a fourth category exists: \textbf{Underweight} (BMI $< 18.5$).
-
-\subsection{Interpretation Guide}
-
-\begin{itemize}
-    \item \textbf{High screening rate + low abnormal rate}: Effective prevention; population is healthy.
-    \item \textbf{High screening rate + high abnormal rate}: Good detection; high undiagnosed burden exists.
-    \item \textbf{Low screening rate}: Insufficient healthcare reach; disease burden is unknown.
-    \item \textbf{Zero screening}: No data; the at-risk population's status is unknown.
-\end{itemize}
-
-\subsection{Annual Cumulative Rate (Subtotal Rows)}
-
-\begin{equation}
-\text{Cumulative Screening Rate}_{\text{annual}} =
-\frac{\sum_{m=1}^{12} \text{Screened}_m}
-     {\sum_{m=1}^{12} \text{At-Risk}_m} \times 100
-\end{equation}
-
-This is a \textbf{person-month rate}: a patient screened in 3 different months contributes 3 to the numerator and 3 person-months to the denominator. It measures screening \textit{encounters}, not unique patients screened per year.
-
-% ============================================================================
-\section{Report 2: Prevalence (Annual Point Prevalence)}
-% ============================================================================
-
-\subsection{Epidemiological Question}
-\textit{What proportion of the total eligible population had the condition at the end of the report year?}
-
-\subsection{Measure Type}
-\textbf{Point prevalence}---a cross-sectional snapshot as of December 31.
-
-\subsection{Formula}
-
-\begin{equation}
-\text{Prevalence}_{\text{annual}} =
-\frac{\text{Patients with target ICD-10 code at Dec 31}}
-     {\text{Total eligible population at Jan 1}} \times 100
-\end{equation}
-
-\subsection{Numerator}
-
-A patient is counted as \textbf{prevalent} if they have the target ICD-10 code with a diagnosis date $\leq$ December 31 of the report year.
-
-\subsection{Denominator}
-
-The total eligible population at January 1. This denominator is \textbf{fixed} for the year.
-
-\paragraph{Rationale for fixed denominator.}
-Point prevalence is a cross-sectional measure. The January 1 population represents the community at the start of the observation period. Removing patients who die during the year would underestimate prevalence.
-
-\subsection{Sub-Components}
-
-\begin{equation}
-\text{Prevalent} = \text{Pre-existing} + \text{Incident During Year}
-\end{equation}
-
-\begin{table}[ht]
-\centering
-\caption{Prevalence sub-components}
-\begin{tabular}{@{}lll@{}}
-\toprule
-\textbf{Component} & \textbf{Definition} & \textbf{Clinical Meaning} \\
-\midrule
-Pre-existing & First diagnosis \textbf{before} Jan 1 & Known cases; already under management \\
-Incident during year & First diagnosis \textbf{during} report year & Newly detected cases \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Interpretation}
-
-\begin{itemize}
-    \item Rising prevalence over years may indicate improved detection, increasing disease burden, or both.
-    \item A high ratio of pre-existing to incident cases suggests a mature detection program.
-    \item A high ratio of incident to pre-existing cases suggests either a recent screening push or genuinely increasing disease incidence.
-\end{itemize}
-
-% ============================================================================
-\section{Report 3: Incidence (Monthly Incidence Rate)}
-% ============================================================================
-
-\subsection{Epidemiological Question}
-\textit{At what rate are new cases of the condition developing in the at-risk population?}
-
-\subsection{Measure Type}
-\textbf{Monthly cumulative incidence proportion} and \textbf{annualized incidence rate} (using January baseline).
-
-\subsection{Monthly Formula}
-
-\begin{equation}
-\text{Incidence Rate}_{M} =
-\frac{\text{New cases diagnosed during month } M}
-     {\text{Patients at-risk at start of month } M} \times 100{,}000
-\end{equation}
-
-\subsection{Incident Case Definition}
-
-A patient is an \textbf{incident case} in month $M$ if \textbf{all} of the following are true:
-\begin{enumerate}[leftmargin=*]
-    \item They are at-risk at the start of month $M$ (no prior diagnosis of the target condition).
-    \item They received the \textbf{first-ever} target ICD-10 code during month $M$.
-    \item The diagnosis date falls within the calendar boundaries of month $M$.
-\end{enumerate}
-
-A patient can be incident \textbf{only once}. After their first diagnosis, they are removed from the at-risk pool for all subsequent months.
-
-\subsection{Why Per 100,000?}
-
-Incidence rates are expressed per 100,000 population to produce readable numbers. Monthly incidence of chronic diseases is typically low (a few cases per thousand per month), so per-100,000 scaling avoids small decimals.
-
-\subsection{Annual Incidence Rate (Subtotal Rows)}
-
-\begin{equation}
-\text{Annual Incidence Rate} =
-\frac{\sum_{m=1}^{12} \text{Incident Cases}_m}
-     {\text{At-Risk Population at January}} \times 100{,}000
-\end{equation}
-
-\paragraph{Rationale for January denominator.}
-Using a fixed baseline (the population at risk on January 1) provides a stable denominator for comparison across clusters and years. Summing monthly denominators would make later months' cases appear more concentrated as the at-risk pool shrinks. The January baseline answers: \textit{Of the population at risk on January 1, how many developed the condition during the year?}
-
-% ============================================================================
-\section{Monthly vs.\ Annual Rate Calculations}
-% ============================================================================
-
-\begin{table}[ht]
-\centering
-\caption{Comparison of monthly and annual rate calculation methods}
-\begin{tabular}{@{}p{0.22\textwidth} p{0.35\textwidth} p{0.35\textwidth}@{}}
-\toprule
-\textbf{Aspect} & \textbf{Monthly Rate} & \textbf{Annual Rate (Subtotal/Grand Total)} \\
-\midrule
-Denominator & At-risk at month start (varies each month) & January at-risk (fixed baseline) \\
-Numerator & Cases/events in that specific month & Sum of all monthly cases/events \\
-Interpretation & ``This month, $X$ per 100,000 at-risk developed the condition'' & ``Of those at risk on Jan 1, $X$ per 100,000 developed the condition during the year'' \\
-Use case & Monitoring month-to-month variation, seasonal patterns & Comparing across clusters, facilities, or years \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Worked Example}
-
-Using the DM simulation data:
-
-\begin{table}[ht]
-\centering
-\caption{Illustration of monthly vs.\ annual incidence rates}
-\begin{tabular}{@{}cccc@{}}
-\toprule
-\textbf{Month} & \textbf{At-Risk Start} & \textbf{New Cases} & \textbf{Monthly Rate (per 100k)} \\
-\midrule
-Jan  & 13 & 0 & 0 \\
-Feb  & 13 & 1 & 7,692 \\
-Mar  & 12 & 1 & 8,333 \\
-Jun  & 11 & 1 & 9,091 \\
-Dec  & 10 & 1 & 10,000 \\
-\midrule
-\textbf{Annual} & \textbf{13 (Jan)} & \textbf{4 (total)} & \textbf{30,769} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The monthly rate rises across the year (0 $\rightarrow$ 10,000) even with a constant 1 case/month because the denominator shrinks. The annual rate (30,769 per 100k) uses the fixed January denominator of 13 to provide a single, comparable number.
-
-% ============================================================================
-\section{Health Cluster Stratification}
-% ============================================================================
-
-\subsection{Rationale}
-Health clusters represent organizational units (geographic regions, facility catchments, or care networks). Stratifying epidemiological measures by cluster answers:
-\begin{itemize}
-    \item Are some clusters screening more effectively than others?
-    \item Is disease burden concentrated in specific clusters?
-    \item Are new cases appearing at different rates across clusters?
-    \item Which clusters have patients with no PHC assignment?
-\end{itemize}
-
-\subsection{Method}
-Health cluster is a \textbf{patient-level attribute} from \texttt{NMR.LEANHIS.PHC\_ASSIGNMENT}. It is attached at the cohort level and flows through to all reports:
-
-\begin{equation}
-\text{Metric}_{\text{cluster}} =
-\frac{\text{Numerator}_{\text{cluster}}}
-     {\text{Denominator}_{\text{cluster}}} \times \text{Scaling Factor}
-\end{equation}
-
-Each cluster's rate is calculated independently using that cluster's own numerator and denominator. The grand total row sums across all clusters.
-
-\subsection{Unassigned Patients}
-Patients with no PHC record are labeled `Unassigned' and reported as a separate group. This is methodologically important: if unassigned patients have systematically different screening rates or disease burden, it may indicate a data quality issue or a genuinely underserved population.
-
-% ============================================================================
-\section{Clinical Classification Thresholds}
-% ============================================================================
+Screening thresholds classify \textbf{at-risk} patients (Module 1 base population) into Normal / Elevated / Abnormal categories based on the most recent screening test result. These cut-points are used by Module 1's Screening report (Report 1) only. Module 2 uses a separate set of control thresholds (§7.4) that classify \textit{prevalent} patients into control tiers.
 
 \subsection{Diabetes Mellitus}
 
@@ -465,7 +227,7 @@ Screening category = $\max(\text{FBS\_category}, \text{A1C\_category})$. FBS aut
 
 \begin{table}[ht]
 \centering
-\caption{DM classification thresholds}
+\caption{DM screening thresholds}
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Category} & \textbf{FBS (mmol/L)} & \textbf{FBS (mg/dL)} & \textbf{HbA1c (\%)} \\
@@ -483,7 +245,7 @@ SYS and DIA must be \textbf{paired from the same visit}. Classification = worst 
 
 \begin{table}[ht]
 \centering
-\caption{HTN classification thresholds}
+\caption{HTN screening thresholds}
 \begin{tabular}{@{}lll@{}}
 \toprule
 \textbf{Category} & \textbf{Systolic (mmHg)} & \textbf{Diastolic (mmHg)} \\
@@ -532,7 +294,7 @@ LDL               & $< 130$ & $130$--$159$ & $\geq 160$ \\
 
 \begin{table}[ht]
 \centering
-\caption{Obesity classification thresholds}
+\caption{Obesity screening thresholds}
 \begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Category} & \textbf{BMI (kg/m}$^2$\textbf{)} \\
@@ -548,22 +310,650 @@ Abnormal (Obese)      & $\geq 30.0$ \\
 BMI values $< 10$ or $> 80$ are excluded as clinically implausible (likely data entry errors).
 
 % ============================================================================
+\section{Module 1: Epidemiological Surveillance}
+% ============================================================================
+
+Module 1 answers: \textit{How much disease exists in the population, how fast is it appearing, and are we screening effectively?} Three reports derive from the \textbf{at-risk} cohort (§3.2), using \textbf{screening thresholds} (§5).
+
+% --------------------------------------------------------------------------
+\subsection{Report 1 --- Screening (Monthly Coverage)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{What proportion of the at-risk population received screening for the condition each month?}
+
+\subsubsection{Measure Type}
+\textbf{Monthly screening coverage rate}---a process measure reflecting healthcare system reach.
+
+\subsubsection{Formula}
+
+\begin{equation}
+\text{Screening Rate}_{M} =
+\frac{\text{Patients screened during month } M}
+     {\text{Patients at-risk at start of month } M} \times 100
+\end{equation}
+
+\subsubsection{Numerator}
+
+A patient is counted as \textbf{screened} in month $M$ if:
+\begin{enumerate}[leftmargin=*]
+    \item They are at-risk at the start of month $M$ ($\text{is\_at\_risk\_start} = \text{TRUE}$), \textbf{and}
+    \item They had the required screening test(s) recorded during month $M$.
+\end{enumerate}
+
+\begin{table}[ht]
+\centering
+\caption{Screening requirements by condition}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Condition} & \textbf{Required Test(s)} & \textbf{Logic} \\
+\midrule
+DM & Fasting Blood Sugar (FBS) \textbf{or} HbA1c & Either test counts \\
+HTN & Systolic BP \textbf{and} Diastolic BP (same visit) & Both must be present \\
+DLP & HDL \textbf{or} LDL & Either lipid component counts \\
+OB & BMI & Single measurement \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Denominator}
+
+The at-risk population at the start of month $M$.
+
+\subsubsection{Stratification by Result Category}
+
+Screened patients are classified by their \textbf{worst} result (the most clinically concerning marker determines the category) using the screening thresholds in §5:
+
+\begin{table}[ht]
+\centering
+\caption{Screening result categories}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Category} & \textbf{Clinical Meaning} \\
+\midrule
+Normal & All markers within normal range \\
+Elevated & $\geq 1$ marker in borderline range, none abnormal \\
+Abnormal & $\geq 1$ marker in disease-indicating range \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For Obesity, a fourth category exists: \textbf{Underweight} (BMI $< 18.5$).
+
+\subsubsection{Interpretation Guide}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{High screening rate + low abnormal rate}: Effective prevention; population is healthy.
+    \item \textbf{High screening rate + high abnormal rate}: Good detection; high undiagnosed burden exists.
+    \item \textbf{Low screening rate}: Insufficient healthcare reach; disease burden is unknown.
+    \item \textbf{Zero screening}: No data; the at-risk population's status is unknown.
+\end{itemize}
+
+\subsubsection{Annual Cumulative Rate (Subtotal Rows)}
+
+\begin{equation}
+\text{Cumulative Screening Rate}_{\text{annual}} =
+\frac{\sum_{m=1}^{12} \text{Screened}_m}
+     {\sum_{m=1}^{12} \text{At-Risk}_m} \times 100
+\end{equation}
+
+This is a \textbf{person-month rate}: a patient screened in 3 different months contributes 3 to the numerator and 3 person-months to the denominator. It measures screening \textit{encounters}, not unique patients screened per year.
+
+% --------------------------------------------------------------------------
+\subsection{Report 2 --- Prevalence (Annual Point Prevalence)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{What proportion of the total eligible population had the condition at the end of the report year?}
+
+\subsubsection{Measure Type}
+\textbf{Point prevalence}---a cross-sectional snapshot as of December 31.
+
+\subsubsection{Formula}
+
+\begin{equation}
+\text{Prevalence}_{\text{annual}} =
+\frac{\text{Patients with target ICD-10 code at Dec 31}}
+     {\text{Total eligible population at Jan 1}} \times 100
+\end{equation}
+
+\subsubsection{Numerator}
+
+A patient is counted as \textbf{prevalent} if they have the target ICD-10 code with a diagnosis date $\leq$ December 31 of the report year.
+
+\subsubsection{Denominator}
+
+The total eligible population at January 1. This denominator is \textbf{fixed} for the year.
+
+\paragraph{Rationale for fixed denominator.}
+Point prevalence is a cross-sectional measure. The January 1 population represents the community at the start of the observation period. Removing patients who die during the year would underestimate prevalence.
+
+\subsubsection{Sub-Components}
+
+\begin{equation}
+\text{Prevalent} = \text{Pre-existing} + \text{Incident During Year}
+\end{equation}
+
+\begin{table}[ht]
+\centering
+\caption{Prevalence sub-components}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Definition} & \textbf{Clinical Meaning} \\
+\midrule
+Pre-existing & First diagnosis \textbf{before} Jan 1 & Known cases; already under management \\
+Incident during year & First diagnosis \textbf{during} report year & Newly detected cases \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Interpretation}
+
+\begin{itemize}[leftmargin=*]
+    \item Rising prevalence over years may indicate improved detection, increasing disease burden, or both.
+    \item A high ratio of pre-existing to incident cases suggests a mature detection program.
+    \item A high ratio of incident to pre-existing cases suggests either a recent screening push or genuinely increasing disease incidence.
+\end{itemize}
+
+% --------------------------------------------------------------------------
+\subsection{Report 3 --- Incidence (Monthly Incidence Rate)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{At what rate are new cases of the condition developing in the at-risk population?}
+
+\subsubsection{Measure Type}
+\textbf{Monthly cumulative incidence proportion} and \textbf{annualized incidence rate} (using January baseline).
+
+\subsubsection{Monthly Formula}
+
+\begin{equation}
+\text{Incidence Rate}_{M} =
+\frac{\text{New cases diagnosed during month } M}
+     {\text{Patients at-risk at start of month } M} \times 100{,}000
+\end{equation}
+
+\subsubsection{Incident Case Definition}
+
+A patient is an \textbf{incident case} in month $M$ if \textbf{all} of the following are true:
+\begin{enumerate}[leftmargin=*]
+    \item They are at-risk at the start of month $M$ (no prior diagnosis of the target condition).
+    \item They received the \textbf{first-ever} target ICD-10 code during month $M$.
+    \item The diagnosis date falls within the calendar boundaries of month $M$.
+\end{enumerate}
+
+A patient can be incident \textbf{only once}. After their first diagnosis, they are removed from the at-risk pool for all subsequent months.
+
+\subsubsection{Why Per 100,000?}
+
+Incidence rates are expressed per 100,000 population to produce readable numbers. Monthly incidence of chronic diseases is typically low (a few cases per thousand per month), so per-100,000 scaling avoids small decimals.
+
+\subsubsection{Annual Incidence Rate (Subtotal Rows)}
+
+\begin{equation}
+\text{Annual Incidence Rate} =
+\frac{\sum_{m=1}^{12} \text{Incident Cases}_m}
+     {\text{At-Risk Population at January}} \times 100{,}000
+\end{equation}
+
+\paragraph{Rationale for January denominator.}
+Using a fixed baseline (the population at risk on January 1) provides a stable denominator for comparison across clusters and years. Summing monthly denominators would make later months' cases appear more concentrated as the at-risk pool shrinks. The January baseline answers: \textit{Of the population at risk on January 1, how many developed the condition during the year?}
+
+% --------------------------------------------------------------------------
+\subsection{Monthly vs.\ Annual Rate Calculations}
+% --------------------------------------------------------------------------
+
+\begin{table}[ht]
+\centering
+\caption{Comparison of monthly and annual rate calculation methods}
+\begin{tabular}{@{}p{0.22\textwidth} p{0.35\textwidth} p{0.35\textwidth}@{}}
+\toprule
+\textbf{Aspect} & \textbf{Monthly Rate} & \textbf{Annual Rate (Subtotal/Grand Total)} \\
+\midrule
+Denominator & At-risk at month start (varies each month) & January at-risk (fixed baseline) \\
+Numerator & Cases/events in that specific month & Sum of all monthly cases/events \\
+Interpretation & ``This month, $X$ per 100,000 at-risk developed the condition'' & ``Of those at risk on Jan 1, $X$ per 100,000 developed the condition during the year'' \\
+Use case & Monitoring month-to-month variation, seasonal patterns & Comparing across clusters, facilities, or years \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Worked Example}
+
+Using the DM simulation data:
+
+\begin{table}[ht]
+\centering
+\caption{Illustration of monthly vs.\ annual incidence rates}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Month} & \textbf{At-Risk Start} & \textbf{New Cases} & \textbf{Monthly Rate (per 100k)} \\
+\midrule
+Jan  & 13 & 0 & 0 \\
+Feb  & 13 & 1 & 7,692 \\
+Mar  & 12 & 1 & 8,333 \\
+Jun  & 11 & 1 & 9,091 \\
+Dec  & 10 & 1 & 10,000 \\
+\midrule
+\textbf{Annual} & \textbf{13 (Jan)} & \textbf{4 (total)} & \textbf{30,769} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The monthly rate rises across the year (0 $\rightarrow$ 10,000) even with a constant 1 case/month because the denominator shrinks. The annual rate (30,769 per 100k) uses the fixed January denominator of 13 to provide a single, comparable number.
+
+% --------------------------------------------------------------------------
+\subsection{Health Cluster Stratification}
+% --------------------------------------------------------------------------
+
+\subsubsection{Rationale}
+Health clusters represent organizational units (geographic regions, facility catchments, or care networks). Stratifying epidemiological measures by cluster answers:
+\begin{itemize}[leftmargin=*]
+    \item Are some clusters screening more effectively than others?
+    \item Is disease burden concentrated in specific clusters?
+    \item Are new cases appearing at different rates across clusters?
+    \item Which clusters have patients with no PHC assignment?
+\end{itemize}
+
+Cluster stratification is applied identically in Module 2 (Reports 4--6); see §7 for report-specific rate forms.
+
+\subsubsection{Method}
+Health cluster is a \textbf{patient-level attribute} from \texttt{NMR.LEANHIS.PHC\_ASSIGNMENT}. It is attached at the cohort level and flows through to all reports:
+
+\begin{equation}
+\text{Metric}_{\text{cluster}} =
+\frac{\text{Numerator}_{\text{cluster}}}
+     {\text{Denominator}_{\text{cluster}}} \times \text{Scaling Factor}
+\end{equation}
+
+Each cluster's rate is calculated independently using that cluster's own numerator and denominator. The grand total row sums across all clusters.
+
+\subsubsection{Unassigned Patients}
+Patients with no PHC record are labeled `Unassigned' and reported as a separate group. This is methodologically important: if unassigned patients have systematically different screening rates or disease burden, it may indicate a data quality issue or a genuinely underserved population.
+
+% ============================================================================
+\section{Module 2: Compliance \& Care Gap}
+% ============================================================================
+
+Module 2 answers: \textit{Of those with disease, how well are we managing them and closing follow-up gaps?} Three reports derive from the \textbf{prevalent} cohort (§3.1), using \textbf{control thresholds} (§7.4).
+
+\subsection{Module 2 Preamble}
+
+\paragraph{Base population.}
+The base population for all Module 2 reports is the \textbf{prevalent cohort at the reference date}, as defined in §3.1. Unlike Module 1's at-risk pool, no further exclusion is applied for incident cases within the report year --- any patient diagnosed at any time before the reference date is included.
+
+\paragraph{Reference date.}
+\begin{itemize}[leftmargin=*]
+    \item For \textbf{Report 4} (Control Level) and \textbf{Report 6} (Care Gap Annual): the prevalent cohort is evaluated as of the end of the report year (December 31). This matches the point-prevalence reference date used by Report 2.
+    \item For \textbf{Report 5} (Care Gap Quarterly): the prevalent cohort is evaluated at the start of each quarter, so quarters-completed counts include all patients diagnosed before that quarter began.
+\end{itemize}
+
+\paragraph{Configuration.}
+All control thresholds and the quarterly target are stored in dedicated config tables --- \texttt{CHI\_REPORTING.chi\_control\_thresholds} and \texttt{CHI\_REPORTING.chi\_care\_gap\_config} --- rather than hardcoded in views. Updating thresholds does not require view re-creation; only the config tables are updated.
+
+\paragraph{Condition-specific follow-up markers.}
+Each condition defines a marker that indicates a meaningful follow-up visit:
+
+\begin{table}[ht]
+\centering
+\caption{Follow-up "completed" criteria by condition}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Condition} & \textbf{Completed if patient had ...} \\
+\midrule
+DM & $\geq 1$ HbA1c measurement that quarter \\
+HTN & $\geq 1$ visit with paired SYS \textbf{and} DIA that quarter \\
+DLP & $\geq 1$ lipid panel component (HDL/LDL/CHOL/TRIG) that quarter \\
+OB  & $\geq 1$ BMI measurement that quarter \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --------------------------------------------------------------------------
+\subsection{Report 4 --- Control Level (Annual)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{Of patients diagnosed with the condition, what proportion have their disease under control based on the most recent monitoring marker?}
+
+\subsubsection{Measure Type}
+\textbf{Annual disease control classification} --- an outcome proxy reflecting adequacy of disease management.
+
+\subsubsection{Base Population}
+\textbf{Prevalent cohort as of December 31} (§3.1). Each prevalent patient contributes one row.
+
+\subsubsection{Formula --- Patient-Level Classification}
+
+For each prevalent patient, the most recent monitoring marker value(s) within the report year are extracted and classified against the control thresholds (§7.4):
+
+\begin{equation}
+\text{level\_order}_{\text{patient}} = \max_{m \in \text{markers}} \left( \text{level\_order}( \text{value}_{m}, \text{thresholds}_{m} ) \right)
+\end{equation}
+
+\begin{itemize}[leftmargin=*]
+    \item DM: single marker (A1C) --- $\text{level\_order}_{\text{patient}} = \text{level\_order}(\text{A1C})$
+    \item HTN: two markers (SYS, DIA) from the most recent paired visit --- $\max(\text{SYS\_level}, \text{DIA\_level})$
+    \item DLP: four markers (HDL, LDL, CHol, Trig) --- $\max(\text{HDL\_level}, \text{LDL\_level}, \text{CHol\_level}, \text{Trig\_level})$
+    \item OB: single marker (BMI) --- $\text{level\_order}_{\text{patient}} = \text{level\_order}(\text{BMI})$
+\end{itemize}
+
+$\text{level\_order} = 0$ is best (controlled); higher values indicate worsening control. The control \textit{label} (the human-readable tier name) is looked up from the threshold row that matched the patient's value.
+
+\subsubsection{Report-Level Formula}
+
+\begin{equation}
+\text{Pct}_{\text{level}, \text{cluster}} =
+\frac{\text{Prevalent patients in control level (cluster)}}
+     {\text{Prevalent patients (cluster)}} \times 100
+\end{equation}
+
+The aggregated report groups prevalent patients by \texttt{health\_cluster} $\times$ \texttt{control\_level}, with cluster subtotals and a grand total row.
+
+\subsubsection{Stratification by Marker Set}
+
+\begin{table}[ht]
+\centering
+\caption{Markers used for control classification by condition}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Condition} & \textbf{Markers} & \textbf{Aggregation} \\
+\midrule
+DM  & A1C only & Single-marker classification \\
+HTN & SYS + DIA (paired) & $\max$ of two marker levels \\
+DLP & HDL, LDL, CHol, Trig & $\max$ of four marker levels \\
+OB  & BMI only & Single-marker classification \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+HDL has gender-specific control thresholds (Male: $\geq 40$ controlled; Female: $\geq 50$ controlled) and is inverted --- lower HDL = worse control.
+
+\subsubsection{Not Monitored}
+
+Prevalent patients with no measurement of the relevant marker during the report year are classified as \textbf{Not Monitored}. This category is reported explicitly and is distinct from any controlled or uncontrolled tier. It is informative on its own: a high Not-Monitored proportion signals a follow-up process failure independent of disease control.
+
+\subsubsection{Interpretation Guide}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{High "Controlled" \%}: Effective disease management across the cluster's prevalent population.
+    \item \textbf{High "Uncontrolled" \%}: Treatment intensification is needed; consider outreach to specific clusters or populations.
+    \item \textbf{High "Not Monitored" \%}: Patients are diagnosed but not receiving guideline-recommended follow-up labs/visits. This is itself a care-gap signal and feeds into Reports 5--6.
+    \item \textbf{Worst-level distribution}: Compare across clusters to identify where the most severely uncontrolled patients are concentrated.
+\end{itemize}
+
+% --------------------------------------------------------------------------
+\subsection{Report 5 --- Care Gap (Quarterly)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{In each quarter of the report year, what proportion of prevalent patients completed a guideline-recommended follow-up visit with the relevant lab?}
+
+\subsubsection{Measure Type}
+\textbf{Quarterly care-gap completion rate} --- a process measure reflecting continuity of care for diagnosed patients.
+
+\subsubsection{Base Population}
+\textbf{Prevalent cohort as of the start of each quarter} (§3.1). The denominator is re-evaluated at each quarter boundary so that patients diagnosed mid-year enter the denominator in the quarter following their diagnosis.
+
+\subsubsection{Quarterly Definitions}
+
+\begin{table}[ht]
+\centering
+\caption{Quarter boundaries}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Quarter} & \textbf{Months} & \textbf{Reporting} \\
+\midrule
+Q1 & January -- March   & Months 1--3 \\
+Q2 & April -- June      & Months 4--6 \\
+Q3 & July -- September  & Months 7--9 \\
+Q4 & October -- December & Months 10--12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A quarter is \textbf{completed} for a patient if the patient had $\geq 1$ follow-up marker in any month of that quarter (see condition-specific criteria in §7.0).
+
+\subsubsection{Formula}
+
+\begin{equation}
+\text{Completion Rate}_{Q, \text{cluster}} =
+\frac{\text{Prevalent patients completing follow-up in quarter } Q \text{ (cluster)}}
+     {\text{Prevalent patients at start of quarter } Q \text{ (cluster)}} \times 100
+\end{equation}
+
+\subsubsection{Complementary Gap Rate}
+
+The inverse metric is also reported directly:
+
+\begin{equation}
+\text{Gap Rate}_{Q, \text{cluster}} = 100\% - \text{Completion Rate}_{Q, \text{cluster}}
+\end{equation}
+
+\subsubsection{Interpretation Guide}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Declining completion across quarters}: Patients who completed follow-up early in the year are dropping off by year-end --- investigate clinic accessibility, scheduling, or reminder systems.
+    \item \textbf{Uniformly low completion}: Systemic care-coordination failure; consider population-level outreach.
+    \item \textbf{Cluster-level variation}: Identifies which facilities are performing well vs.\ under-performing on continuity-of-care for diagnosed patients.
+\end{itemize}
+
+% --------------------------------------------------------------------------
+\subsection{Report 6 --- Care Gap (Annual)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+\textit{Across the four quarters of the report year, how many prevalent patients completed follow-up in 0, 1, 2, 3, or all 4 quarters --- and what proportion met the recommended target?}
+
+\subsubsection{Measure Type}
+\textbf{Annual care-gap distribution} --- an outcome-oriented summary of follow-up continuity across the year.
+
+\subsubsection{Base Population}
+\textbf{Prevalent cohort as of December 31} (§3.1). All prevalent patients are counted, regardless of when they were diagnosed.
+
+\subsubsection{Formula}
+
+For each prevalent patient, count the number of quarters in which they completed follow-up:
+
+\begin{equation}
+\text{quarters\_completed}_{\text{patient}} = \sum_{Q=1}^{4} \mathbb{1}[\text{patient completed follow-up in quarter } Q]
+\end{equation}
+
+Patients are then binned by $\text{quarters\_completed} \in \{0, 1, 2, 3, 4\}$. The aggregated report shows the count and percentage of prevalent patients in each bin, stratified by \texttt{health\_cluster}.
+
+\subsubsection{Meeting Target}
+
+The target is configured in \texttt{chi\_care\_gap\_config.target\_quarters\_completed} (default: 3). Patients are flagged:
+
+\begin{equation}
+\text{meets\_target}_{\text{patient}} = \mathbb{1}[\text{quarters\_completed}_{\text{patient}} \geq \text{target\_quarters\_completed}]
+\end{equation}
+
+The aggregated report includes a \texttt{$\geq$ Target} summary row per cluster, plus a grand-total row across all clusters:
+
+\begin{equation}
+\text{Pct Meeting Target}_{\text{cluster}} =
+\frac{\text{Prevalent patients meeting target (cluster)}}
+     {\text{Prevalent patients (cluster)}} \times 100
+\end{equation}
+
+\subsubsection{Interpretation Guide}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Most patients in 0--1 quarters}: Severe follow-up failure; the prevalent cohort is not receiving guideline-recommended care.
+    \item \textbf{Bimodal distribution (0 and 4 quarters)}: Patients are either fully engaged or completely lost to follow-up; consider targeted outreach to the 0-quarter group.
+    \item \textbf{Bell-shaped around 2 quarters}: Patients receive intermittent but not guideline-concordant care; consider structured recall systems.
+    \item \textbf{Most patients at or above target}: Effective continuity of care for the prevalent population.
+\end{itemize}
+
+% --------------------------------------------------------------------------
+\subsection{Control Thresholds}
+% --------------------------------------------------------------------------
+
+Control thresholds classify \textbf{prevalent} patients (Module 2 base population) into a controlled tier plus one or more uncontrolled tiers based on their most recent monitoring marker value. These are stored in the \texttt{CHI\_REPORTING.chi\_control\_thresholds} config table and are distinct from the screening thresholds in §5 (which classify at-risk patients for case-finding).
+
+\subsubsection{Threshold Schema}
+
+Each row of \texttt{chi\_control\_thresholds} defines one (condition, marker, gender, level) tuple with inclusive lower bound \texttt{min\_value} and exclusive upper bound \texttt{max\_value}:
+
+\begin{table}[ht]
+\centering\small
+\caption{Control threshold schema (chi\_control\_thresholds)}
+\begin{tabular}{@{}p{0.20\textwidth} p{0.13\textwidth} p{0.13\textwidth} p{0.10\textwidth} p{0.10\textwidth} p{0.10\textwidth} p{0.14\textwidth}@{}}
+\toprule
+\textbf{condition} & \textbf{marker} & \textbf{gender} & \textbf{min} & \textbf{max} & \textbf{order} & \textbf{label} \\
+\midrule
+\texttt{dm}  & \texttt{a1c}  & \texttt{All}    & \texttt{NULL} & 7.0  & 0 & \texttt{Controlled (A1C $<$ 7.0\%)} \\
+\texttt{dm}  & \texttt{a1c}  & \texttt{All}    & 7.0  & 8.0  & 1 & \texttt{Uncontrolled (A1C 7.0--7.9\%)} \\
+$\cdots$ & $\cdots$ & $\cdots$ & $\cdots$ & $\cdots$ & $\cdots$ & $\cdots$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A patient's marker value is matched against the row whose $[min, max)$ range contains it. \texttt{level\_order} is the sort key: 0 = best (controlled); higher values are worse. The \texttt{label} is the human-readable tier name shown in reports.
+
+\subsubsection{Default Thresholds by Condition}
+
+\paragraph{DM (A1C only).}
+
+\begin{table}[ht]
+\centering
+\caption{DM control thresholds (A1C)}
+\begin{tabular}{@{}cll@{}}
+\toprule
+\textbf{Order} & \textbf{Label} & \textbf{Range (\%)} \\
+\midrule
+0 & Controlled      & $< 7.0$ \\
+1 & Uncontrolled    & $7.0$ -- $7.9$ \\
+2 & Uncontrolled    & $8.0$ -- $8.9$ \\
+3 & Uncontrolled    & $\geq 9.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{HTN (SYS + DIA, paired).}
+
+\begin{table}[ht]
+\centering
+\caption{HTN control thresholds (SYS, DIA)}
+\begin{tabular}{@{}clll@{}}
+\toprule
+\textbf{Marker} & \textbf{Order} & \textbf{Label} & \textbf{Range} \\
+\midrule
+SYS & 0 & Controlled      & $< 130$ mmHg \\
+SYS & 1 & Uncontrolled    & $130$ -- $139$ \\
+SYS & 2 & Uncontrolled    & $140$ -- $159$ \\
+SYS & 3 & Uncontrolled    & $\geq 160$ \\
+\midrule
+DIA & 0 & Controlled      & $< 80$ mmHg \\
+DIA & 1 & Uncontrolled    & $80$ -- $89$ \\
+DIA & 2 & Uncontrolled    & $90$ -- $99$ \\
+DIA & 3 & Uncontrolled    & $\geq 100$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{DLP (HDL, LDL, CHol, Trig --- $\max$ of 4).}
+
+\begin{table}[ht]
+\centering
+\caption{DLP control thresholds (HDL, LDL, CHol, Trig)}
+\begin{tabular}{@{}lllll@{}}
+\toprule
+\textbf{Marker} & \textbf{Gender} & \textbf{Order} & \textbf{Label} & \textbf{Range (mg/dL)} \\
+\midrule
+LDL  & All   & 0 & Controlled      & $< 100$ \\
+LDL  & All   & 1 & Uncontrolled    & $100$ -- $129$ \\
+LDL  & All   & 2 & Uncontrolled    & $130$ -- $159$ \\
+LDL  & All   & 3 & Uncontrolled    & $\geq 160$ \\
+\midrule
+CHol & All   & 0 & Controlled      & $< 200$ \\
+CHol & All   & 1 & Uncontrolled    & $200$ -- $239$ \\
+CHol & All   & 2 & Uncontrolled    & $240$ -- $279$ \\
+CHol & All   & 3 & Uncontrolled    & $\geq 280$ \\
+\midrule
+Trig & All   & 0 & Controlled      & $< 150$ \\
+Trig & All   & 1 & Uncontrolled    & $150$ -- $199$ \\
+Trig & All   & 2 & Uncontrolled    & $200$ -- $499$ \\
+Trig & All   & 3 & Uncontrolled    & $\geq 500$ \\
+\midrule
+HDL  & Male  & 0 & Controlled      & $\geq 40$ \\
+HDL  & Male  & 1 & Uncontrolled    & $< 40$ \\
+HDL  & Female & 0 & Controlled     & $\geq 50$ \\
+HDL  & Female & 1 & Uncontrolled   & $< 50$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{OB (BMI only, WHO).}
+
+\begin{table}[ht]
+\centering
+\caption{OB control thresholds (BMI)}
+\begin{tabular}{@{}cll@{}}
+\toprule
+\textbf{Order} & \textbf{Label} & \textbf{Range (kg/m$^2$)} \\
+\midrule
+0 & Controlled      & $18.5$ -- $24.9$ \\
+1 & Uncontrolled    & $25.0$ -- $29.9$ \\
+2 & Uncontrolled    & $30.0$ -- $34.9$ \\
+3 & Uncontrolled    & $\geq 35.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --------------------------------------------------------------------------
+\subsection{Quarterly Definitions \& Follow-Up Criteria}
+% --------------------------------------------------------------------------
+
+The care-gap module partitions the report year into four calendar quarters and applies a condition-specific "completed follow-up" criterion per quarter. Both pieces are shared across Reports 5 and 6.
+
+\subsubsection{Quarter Boundaries}
+
+See Report 5 (§7.2) for the quarter-month mapping. Q1 = months 1--3, Q2 = 4--6, Q3 = 7--9, Q4 = 10--12. Boundaries align with calendar quarters.
+
+\subsubsection{Follow-Up "Completed" Criteria}
+
+A quarter is marked \textbf{completed} for a prevalent patient if any of the condition's follow-up markers was recorded in any month of that quarter:
+
+\begin{table}[ht]
+\centering
+\caption{Follow-up "completed" criteria by condition (repeated from §7.0)}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Condition} & \textbf{Completed if patient had ...} & \textbf{Source table(s)} \\
+\midrule
+DM  & $\geq 1$ HbA1c measurement that quarter              & LAB + OBS \\
+HTN & $\geq 1$ visit with paired SYS \textbf{and} DIA      & OBS only \\
+DLP & $\geq 1$ lipid panel component (HDL/LDL/CHOL/TRIG)   & LAB + OBS \\
+OB  & $\geq 1$ BMI measurement that quarter                 & OBS only \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Why HTN requires a paired visit.}
+Screening classification already requires SYS+DIA to be from the same visit (§5.2) for clinical validity. The same constraint is carried into care-gap completion: a patient with only SYS or only DIA recorded that quarter is not counted as having completed follow-up.
+
+\subsubsection{Target Configuration}
+
+The quarterly target (default: 3 quarters) is stored in \texttt{chi\_care\_gap\_config.target\_quarters\_completed} and is read by Report 6 via \texttt{CROSS JOIN}. Changing the target does not require view re-creation.
+
+% ============================================================================
 \section{Assumptions \& Limitations}
 % ============================================================================
 
-\subsection{Assumptions}
+\subsection{Shared Assumptions (Module 1 \& Module 2)}
 
-\begin{enumerate}[leftmargin=*, label=\textbf{A\arabic*}]
-    \item \textbf{Complete diagnosis capture}. It is assumed that all diagnoses are recorded in the EMR with accurate ICD-10 codes and dates. Undiagnosed patients are misclassified as at-risk.
-    \item \textbf{Lab result accuracy}. Screening classifications assume lab/observation values are correctly recorded. Transcription errors (e.g., mg/dL entered as mmol/L) may cause misclassification. The DM dual-unit auto-detection mitigates but does not eliminate this.
+\begin{enumerate}[leftmargin=*, label=\textbf{SA\arabic*}]
+    \item \textbf{Complete diagnosis capture}. It is assumed that all diagnoses are recorded in the EMR with accurate ICD-10 codes and dates. Undiagnosed patients are misclassified as at-risk (Module 1) or non-prevalent (Module 2).
+    \item \textbf{Lab result accuracy}. Both screening classifications (Module 1) and control classifications (Module 2) assume lab/observation values are correctly recorded. Transcription errors may cause misclassification. The DM dual-unit auto-detection mitigates but does not eliminate this.
     \item \textbf{PHC assignment completeness}. Patients without a PHC record are assumed to be genuinely unassigned, not the result of a data integration gap.
     \item \textbf{Visit-date alignment}. Lab results and observations are attributed to the month of the associated patient visit, not the date the result was entered or verified.
-    \item \textbf{No loss to follow-up}. Patients who leave the catchment area but have no death record are assumed to remain in the population. This may overstate the denominator.
+    \item \textbf{No loss to follow-up}. Patients who leave the catchment area but have no death record are assumed to remain in the population. This may overstate the denominator for both modules.
 \end{enumerate}
 
-\subsection{Limitations}
+\subsection{Module 1 Assumptions \& Limitations}
 
-\begin{enumerate}[leftmargin=*, label=\textbf{L\arabic*}]
+\begin{enumerate}[leftmargin=*, label=\textbf{M1-L\arabic*}]
     \item \textbf{Screening $\neq$ diagnosis}. A patient with an abnormal screening result does not necessarily have the disease. The screening report measures test coverage and results, not confirmed diagnoses.
     \item \textbf{First diagnosis $\neq$ disease onset}. The incidence measure captures the date a diagnosis was \textit{recorded}, not the date the disease \textit{developed}. A patient diagnosed with E11 in June may have had undiagnosed diabetes for years.
     \item \textbf{Screening encounter double-counting}. The annual cumulative screening rate counts screening \textit{events}, not unique patients. A patient screened every month contributes 12 to the numerator. This metric measures testing volume, not the proportion of the population ever screened.
@@ -572,30 +962,54 @@ BMI values $< 10$ or $> 80$ are excluded as clinically implausible (likely data 
     \item \textbf{Cross-sectional prevalence denominator}. The prevalence denominator is fixed at January 1. Patients who turn 18, receive a National ID, or immigrate into the catchment during the year are not captured.
 \end{enumerate}
 
+\subsection{Module 2 Assumptions \& Limitations}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{M2-L\arabic*}]
+    \item \textbf{Control thresholds are treatment targets, not physiological norms}. The default A1C target ($< 7.0\%$), BP target ($< 130 / < 80$), and lipid targets reflect guideline-recommended treatment goals for the general diabetic / hypertensive / dyslipidemic population. Individualized targets may differ (e.g., tighter control for some patients, more relaxed for frail elderly). The report applies a uniform threshold across all prevalent patients; clinical interpretation should account for individual variation.
+    \item \textbf{``Completed'' is a process proxy, not an outcome}. Report 5 measures whether a lab/visit was \textit{recorded}, not whether the patient's disease is \textit{well managed}. A patient with quarterly HbA1c measurements all above 9.0\% is counted as having completed follow-up each quarter --- but is severely uncontrolled. Combine Report 4 (control level) and Report 5 (completion) for a complete picture.
+    \item \textbf{Mid-year diagnoses contribute partial-year data}. A patient diagnosed in October contributes to the prevalent cohort as of December 31 (Report 4 and Report 6 denominators) and to Report 5 from Q4 onward only. They have 1 quarter to complete follow-up, making them structurally unable to meet a target of 3 quarters. Report 6's annual distribution should be interpreted with awareness of the incident case mix.
+    \item \textbf{``Not Monitored'' conflates care gaps and data gaps}. A prevalent patient with no measurement during the year may genuinely be lost to follow-up (a care-gap signal) or may have measurements recorded in systems not captured by the EMR (a data-coverage issue). Report 5's per-quarter completion rate is the primary mechanism to distinguish these.
+    \item \textbf{Multi-marker aggregation masks individual marker issues}. For HTN (SYS+DIA) and DLP (4 markers), the overall control level is the $\max$ across markers. A patient with controlled LDL but severely uncontrolled HDL is reported at the worst marker's level only --- the underlying multi-marker profile is not visible in the aggregated report.
+    \item \textbf{HDL gender-specific thresholds assume recorded gender is correct}. Patients with miscoded or missing gender inherit Male thresholds by default. Gender-specific reports should be cross-checked against the cohort view's gender distribution.
+    \item \textbf{Quarterly boundaries align with calendar quarters, not patient-level follow-up windows}. Q1 = Jan--Mar is a calendar convention. A patient diagnosed on March 15 has only 16 days to complete Q1 follow-up before the quarter ends; the report does not normalize for time-in-quarter.
+\end{enumerate}
+
 % ============================================================================
-\section{Reference: Rate Formulas}
+\section{Reference: Formula Index}
 % ============================================================================
 
 \begin{table}[ht]
-\centering
-\caption{Summary of all rate formulas}
-\begin{tabular}{@{}p{0.22\textwidth} p{0.37\textwidth} p{0.37\textwidth}@{}}
+\centering\small
+\caption{Summary of all rate formulas (6 reports across 2 modules)}
+\begin{tabular}{@{}p{0.10\textwidth} p{0.16\textwidth} p{0.34\textwidth} p{0.34\textwidth}@{}}
 \toprule
-\textbf{Report} & \textbf{Detail Row Formula} & \textbf{Subtotal / Grand Total Formula} \\
+\textbf{Module} & \textbf{Report} & \textbf{Detail Row Formula} & \textbf{Subtotal / Grand Total Formula} \\
 \midrule
+\multirow{3}{*}{M1} &
 Screening &
 $\dfrac{\text{Screened}_m}{\text{At-Risk}_m} \times 100$ &
-$\dfrac{\sum\text{Screened}_m}{\sum\text{At-Risk}_m} \times 100$ (cumulative) \\[16pt]
-Prevalence &
+$\dfrac{\sum\text{Screened}_m}{\sum\text{At-Risk}_m} \times 100$ (cumulative) \\[14pt]
+& Prevalence &
 --- (annual only) &
-$\dfrac{\text{Prevalent}_{\text{Dec 31}}}{\text{Total Pop}_{\text{Jan 1}}} \times 100$ \\[16pt]
-Incidence &
+$\dfrac{\text{Prevalent}_{\text{Dec 31}}}{\text{Total Pop}_{\text{Jan 1}}} \times 100$ \\[14pt]
+& Incidence &
 $\dfrac{\text{New Cases}_m}{\text{At-Risk}_m} \times 100{,}000$ &
-$\dfrac{\sum\text{New Cases}_m}{\text{At-Risk}_{\text{Jan}}} \times 100{,}000$ (annualized) \\
+$\dfrac{\sum\text{New Cases}_m}{\text{At-Risk}_{\text{Jan}}} \times 100{,}000$ (annualized) \\[10pt]
+\midrule
+\multirow{3}{*}{M2} &
+Control &
+$\dfrac{\text{Pts in level}_{c}}{\text{Prevalent}_{c}} \times 100$ &
+$\dfrac{\sum\text{Pts in level}}{\sum\text{Prevalent}} \times 100$ \\[14pt]
+& Care Gap Q &
+$\dfrac{\text{Completed}_Q}{\text{Prevalent}_Q} \times 100$ &
+$\dfrac{\sum\text{Completed}_Q}{\sum\text{Prevalent}_Q} \times 100$ \\[14pt]
+& Care Gap Annual &
+$\dfrac{\text{Pts in bin}}{\text{Prevalent}} \times 100$ &
+Bins + ``$\geq$ Target'' row per cluster \\[4pt]
 \bottomrule
 \end{tabular}
 \end{table}
 
-Where $m = 1, 2, \dots, 12$ (calendar month).
+Where $m$ = month (1--12), $c$ = cluster, $Q$ = quarter (1--4), ``bin'' = $\{0, 1, 2, 3, 4\}$ quarters completed.
 
 \end{document}
