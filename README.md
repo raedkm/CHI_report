@@ -18,15 +18,17 @@
 
 ## Overview
 
-The CHI reporting system generates **3 Module-1 report types** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema). Module 2 (Compliance & Care Gap) is supported for 4 of the 5 conditions. Prediabetes contributes 2 Module-1 reports (incidence monthly, high-risk prevalence annual) but no Module-2 reports.
+The CHI reporting system generates **Module-1 reports** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema): Screening, Prevalence, and Incidence — all parameterized by ICD-10 code set. Module 2 (Compliance & Care Gap) is supported for 4 of the 5 conditions plus a generic High-Risk Patients report.
 
-| Report | Frequency | Question It Answers |
-|--------|-----------|---------------------|
-| **Screening Report** | Monthly | What % of the at-risk population is being tested each month? (DM/HTN/DLP/OB only) |
-| **Prevalence Report** | Annual | What % of the total population has the condition at year-end? |
-| **Incidence Report** | Monthly | How many new cases are developing per 100,000 at-risk per month? |
-| **Prediabetes Incidence** | Monthly | How many new R73.03 (prediabetes) diagnoses per 100,000 prediabetes-at-risk per month? |
-| **High-Risk Prediabetes Prevalence** | Annual | Of prediabetes patients, what % carry ≥2 high-risk factors (BMI ≥25, HTN, DLP, family history, GDM, PCOS)? |
+| Report | Frequency | Question It Answers | Module |
+|--------|-----------|---------------------|--------|
+| **Screening Report** | Monthly | What % of the at-risk population is being tested each month? (DM/HTN/DLP/OB only) | M1 |
+| **Prevalence Report** | Annual | What % of the total population has the condition at year-end? (all 5 conditions) | M1 |
+| **Incidence Report** | Monthly | How many new cases are developing per 100,000 at-risk per month? (all 5 conditions) | M1 |
+| **Control Level Report** | Annual | What % of prevalent patients have disease under control per configurable thresholds? (DM/HTN/DLP/OB) | M2 |
+| **Care Gap (Quarterly)** | Quarterly | What % of prevalent patients completed follow-up that quarter? (DM/HTN/DLP/OB) | M2 |
+| **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (DM/HTN/DLP/OB) | M2 |
+| **High-Risk Patients** | Annual | What % of prevalent patients carry ≥2 risk factors (parameterized per condition; v1 covers Prediabetes) | M2 |
 
 ### Conditions Covered
 
@@ -447,6 +449,7 @@ uv run python scripts/create_views_in_duckdb.py
 uv run python scripts/run_all_reports.py all
 # Or: uv run python scripts/run_all_reports.py dm
 # Or: uv run python scripts/run_all_reports.py prediab
+# Or: uv run python scripts/run_all_reports.py high_risk (generic Module-2 report)
 ```
 
 ### Simulation Data Profile
@@ -461,6 +464,7 @@ uv run python scripts/run_all_reports.py all
 | DLP prevalent | 4, DLP incident | 2 |
 | OB prevalent | 3, OB incident | 1 |
 | PREDIAB prevalent (year-end) | 7, PREDIAB incident | 3 |
+| PREDIAB high-risk (≥2 factors) | 3 (= 42.9% of prevalent) | (generic HR report) |
 
 ### DuckDB → Snowflake Dialect Mapping
 
