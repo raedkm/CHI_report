@@ -652,17 +652,31 @@ ORDER BY health_cluster, sort_order, sort_key
 # PREDIABETES REPORTS — bespoke dispatcher
 # ===========================================================================
 # Prediabetes has a different shape from the other 4 conditions:
-#   • Only 2 reports (incidence monthly, high-risk prevalence annual)
-#   • No screening report (no prediabetes-specific lab)
-#   • No Module-2 monitoring views (deferred)
-#   • Risk-factor flags are computed inside the cohort view, not here
+#   • 2 standard Module-1 reports (prevalence annual, incidence monthly)
+#   • NO Module-2 monitoring views (deferred)
+#   • The high-risk report is now GENERIC (run_high_risk_reports below)
 #
-# The two reports below query the CHI_REPORTING views directly (not the raw
-# NMR.LEANHIS_* tables), so they exercise the same path as the runner's
-# Module-2 reports. This keeps the runner's run_condition() untouched.
+# The reports query the CHI_REPORTING views directly (not the raw NMR.LEANHIS_*
+# tables), so they exercise the same path as the runner's Module-2 reports.
 def run_prediab_reports(con):
-    """Run the 2 Module-1 prediabetes reports: incidence monthly + high-risk prevalence annual."""
+    """Run the 2 standard Module-1 prediabetes reports: prevalence annual + incidence monthly."""
     name = "Prediabetes (PREDIAB)"
+
+    # --- PREVALENCE REPORT (Annual) — query CHI_REPORTING view ---
+    prev_sql = """
+    SELECT year, health_cluster, total_population, prevalent_prediab_count,
+           incident_during_year, pre_existing_prediab_count,
+           prevalence_rate_pct, period_label, sort_order
+    FROM CHI_REPORTING.rpt_prediab_prevalence_annual
+    ORDER BY sort_order, health_cluster
+    """
+    rows = run_query(con, prev_sql)
+    subheader(f"{name} — Report 2: Prevalence (Annual, R73.03)")
+    print_table(
+        ["Year", "Cluster", "Total Pop", "Prevalent", "Incident", "Pre-Exist", "Rate"],
+        rows,
+        [str, str, str, str, str, str, lambda v: f"{v:.4f}%" if v is not None else "  N/A"]
+    )
 
     # --- INCIDENCE REPORT (Monthly) — query CHI_REPORTING view ---
     inc_sql = """
@@ -673,26 +687,37 @@ def run_prediab_reports(con):
     ORDER BY health_cluster, sort_order, sort_key
     """
     rows = run_query(con, inc_sql)
-    subheader(f"{name} — Report 7: Incidence (Monthly, R73.03)")
+    subheader(f"{name} — Report 3: Incidence (Monthly, R73.03)")
     print_table(
         ["Cluster", "Period", "At-Risk Start", "New Cases", "Rate/100k"],
         rows,
         [str, str, str, str, lambda v: f"{v:.1f}" if v is not None else "  N/A"]
     )
 
-    # --- HIGH-RISK PREVALENCE REPORT (Annual) — query CHI_REPORTING view ---
+
+# ===========================================================================
+# HIGH-RISK PATIENTS REPORT — generic Module-2 dispatcher
+# ===========================================================================
+# Generic High-Risk Patients report (Report 7) parameterized by condition via
+# the chi_high_risk_factors config table. For v1 only PREDIAB has factors
+# defined, but the report is extendable to other conditions by inserting
+# rows into the config.
+def run_high_risk_reports(con):
+    """Run the generic Module-2 High-Risk Patients report across all conditions."""
+    name = "High-Risk Patients"
+
     hr_sql = """
-    SELECT year, health_cluster, total_prediab_population, high_risk_count,
+    SELECT condition, health_cluster, total_prevalent, high_risk_count,
            high_risk_pct, sort_key, sort_order
-    FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual
-    ORDER BY sort_order, sort_key
+    FROM CHI_REPORTING.rpt_high_risk_patients_annual
+    ORDER BY condition, sort_order, sort_key
     """
     rows = run_query(con, hr_sql)
-    subheader(f"{name} — Report 8: High-Risk Prevalence (Annual)")
+    subheader(f"{name} — Report 7 (Generic, M2): High-Risk Patients (Annual)")
     print_table(
-        ["Year", "Cluster", "Total Prediab", "High-Risk", "HR %"],
+        ["Condition", "Cluster", "Total Prevalent", "High-Risk", "HR %"],
         rows,
-        [str, str, str, str, lambda v: f"{v:.1f}%" if v is not None else "  N/A"]
+        [str, str, str, str, lambda v: f"{v:.2f}%" if v is not None else "  N/A"]
     )
 
 
@@ -781,13 +806,18 @@ if __name__ == "__main__":
                 run_prediab_reports(con)
             else:
                 run_condition(con, CONDITIONS[key])
+        # Generic Module-2 High-Risk Patients report across all conditions
+        run_high_risk_reports(con)
+    elif condition == "high_risk":
+        # Generic Module-2 High-Risk Patients report only
+        run_high_risk_reports(con)
     elif condition in CONDITIONS:
         if condition == "prediab":
             run_prediab_reports(con)
         else:
             run_condition(con, CONDITIONS[condition])
     else:
-        print(f"Unknown condition: {condition}. Use: dm, htn, dlp, ob, prediab, all")
+        print(f"Unknown condition: {condition}. Use: dm, htn, dlp, ob, prediab, high_risk, all")
         con.close()
         sys.exit(1)
 
