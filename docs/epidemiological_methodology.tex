@@ -640,29 +640,26 @@ OB  & $\geq 1$ BMI measurement that quarter \\
 \end{table}
 
 % --------------------------------------------------------------------------
-\subsection{Report 7 --- High-Risk Patients (Annual)}
-% --------------------------------------------------------------------------
+\subsection{Report 7 --- High-Risk Prediabetes Prevalence (Annual)}
 
 \subsubsection{Epidemiological Question}
-Of patients diagnosed with a given condition by year-end, what proportion carry $\geq 2$ risk factors that signal imminent progression or complication --- and therefore warrant elevated clinical attention?
+Of patients diagnosed with prediabetes (R73.03) by year-end, what proportion carry $\geq 2$ high-risk factors that signal imminent progression to Type 2 diabetes --- and therefore warrant elevated clinical attention?
 
 \subsubsection{Measure Type}
-\textbf{Clinical risk stratification} --- an annual prevalence-of-risk-factor-burden snapshot per condition. The denominator is the \textbf{prevalent cohort at year-end} (Module 2 convention, like Reports 4--6), and the numerator is the subset of prevalent patients whose risk-factor count exceeds the configurable threshold.
+\textbf{Clinical risk stratification} --- an annual prevalence-of-risk-factor-burden snapshot of the Prediabetes-prevalent cohort. The denominator is \textbf{all R73-prevalent patients at year-end} (Module 2 convention, like Reports 4--6), and the numerator is the subset whose risk-factor count exceeds the configurable threshold ($N = 2$).
 
-This is a \emph{generic} report: the underlying view (\texttt{rpt\_high\_risk\_patients\_annual}) runs across all five conditions in one pass, parameterized by the \texttt{chi\_high\_risk\_factors} config table. For v1 only Prediabetes is populated, but the report is designed to extend to any condition with one SQL-only change (INSERT more config rows).
+This is the \textbf{v1 instantiation} of a \emph{generic} report pattern. The underlying staging view \texttt{stg\_high\_risk\_patient} (defined in \texttt{project\_queries/00a\_high\_risk\_views.sql}) is parameterized by condition via the \texttt{chi\_high\_risk\_factors} config table, so the same machinery can produce equivalent reports for DM/HTN/DLP/OB once risk factors are defined for them. For now only the Prediabetes view (\texttt{rpt\_prediab\_prevalence\_high\_risk\_annual}, in \texttt{project\_queries/Prediabetes/}) is materialized because Prediabetes is the only condition with factor rows.
 
 \subsubsection{Definition: High-Risk}
-A patient is \textbf{high-risk} for condition \textit{C} if, at year-end:
+A Prediabetes patient is \textbf{high-risk} if, at year-end:
 \begin{enumerate}[leftmargin=*]
-    \item They carry the condition's target ICD-10 code (prevalent at year-end) \textbf{AND}
-    \item They have \textbf{$\geq N$ weighted risk factors} (default $N = 2$) drawn from condition-specific rows in \texttt{chi\_high\_risk\_factors}.
+    \item They carry an \texttt{R73.03} diagnosis (prevalent at year-end) \textbf{AND}
+    \item They have \textbf{$\geq N$ weighted risk factors} (default $N = 2$) drawn from the 6 Prediabetes rows in \texttt{chi\_high\_risk\_factors}.
 \end{enumerate}
 
-For v1 Prediabetes, the 6 risk factors are documented in the new §7.1.1 below.
-
-\paragraph{§7.1.1: Prediabetes risk factors (v1).}
 \begin{table}[ht]
 \centering\small
+\caption{Prediabetes risk factors (v1)}
 \begin{tabular}{@{}p{0.32\textwidth} p{0.42\textwidth} p{0.18\textwidth}@{}}
 \toprule
 \textbf{Factor} & \textbf{Source} & \textbf{Detail} \\
@@ -677,8 +674,10 @@ PCOS / PMOS & \texttt{stg\_prediab\_cohort.has\_pcos} & ICD-10 E28.2 (polycystic
 \end{tabular}
 \end{table}
 
-\subsubsection{Base Population (per condition)}
-For each condition, the denominator is \textbf{all patients whose target ICD-10 code is present at year-end} (\texttt{first\_target\_date < report\_end}). For Prediabetes: \texttt{first\_r73\_date < report\_end}. For DM: \texttt{first\_e11\_date < report\_end}. Etc.
+\subsubsection{Base Population (Prediabetes prevalent at year-end)}
+\textbf{All R73-prevalent patients at year-end} = patients with \texttt{first\_r73\_date IS NOT NULL AND first\_r73\_date < report\_end}. Eligible (\texttt{is\_in\_total\_population = TRUE}) AND prevalent (\texttt{has\_prediabetes = TRUE}).
+
+This is the \textbf{clinical risk-stratification} lens: ``of patients already known to have prediabetes, what fraction are the highest-concern cases? --- as opposed to a public-health denominator (total population), which would answer a different question.
 
 \subsubsection{Configuration: chi\_high\_risk\_factors}
 The risk-factor definitions live in a config table (mirrors the \texttt{chi\_control\_thresholds} pattern). Schema:
@@ -702,42 +701,36 @@ The risk-factor definitions live in a config table (mirrors the \texttt{chi\_con
 \end{tabular}
 \end{table}
 
-\textbf{Extending to a new condition} (e.g.\ adding High-Risk logic to DM):
+\textbf{Extending the High-Risk Patients pattern to a new condition} (e.g.\ adding High-Risk logic to DM):
 \begin{enumerate}[leftmargin=*]
     \item INSERT new rows into \texttt{chi\_high\_risk\_factors} with \texttt{condition = 'dm'}
     \item Add a \texttt{CASE} branch in \texttt{stg\_high\_risk\_patient.factor\_evaluations} for the new \texttt{source\_view}/\texttt{source\_column} pair
-    \item No view re-creation required --- the report auto-detects new conditions at query time
+    \item Create a corresponding \texttt{rpt\_{cond}\\_prevalence\_high\_risk\_annual} view in the condition's folder, mirroring the Prediabetes report
 \end{enumerate}
 
-For v1 only Prediabetes is wired through \texttt{stg\_high\_risk\_patient}. Other conditions return zero rows because their source columns are not yet referenced in the view's CASE chain.
-
-\subsubsection{Generic Formula}
+\subsubsection{Formula}
 \begin{equation}
-\text{High-Risk Pct}_{C, \text{cluster}} = \frac{\text{Prevalent patients of condition } C \text{ in cluster with risk\_factor\_count} \geq N}{\text{Prevalent patients of condition } C \text{ in cluster}} \times 100
+\text{High-Risk Pct}_{\text{cluster}} = \frac{\text{Prediab patients at year-end with risk\_factor\_count} \geq 2 \text{ (cluster)}}{\text{Prediab patients at year-end (cluster)}} \times 100
 \end{equation}
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Numerator}: condition-\textit{C} prevalent patients where \texttt{is\_high\_risk = TRUE} (i.e.\ their \texttt{risk\_factor\_count} $\geq N$).
-    \item \textbf{Denominator}: condition-\textit{C} prevalent patients at year-end.
+    \item \textbf{Numerator}: Prediabetes-prevalent patients where \texttt{is\_high\_risk = TRUE} (i.e.\ their \texttt{risk\_factor\_count} $\geq 2$).
+    \item \textbf{Denominator}: Prediabetes-prevalent patients at year-end.
 \end{itemize}
 
 \subsubsection{Report Structure}
-Two-layer rows per condition: detail (\texttt{sort\_order=0}, per cluster) + grand total (\texttt{sort\_order=2}, \texttt{── ALL CLUSTERS ──}). For conditions with no factors defined, the section is omitted entirely (no zero-filled rows; the report only appears for populated conditions).
-
-Output columns: \texttt{condition}, \texttt{health\_cluster}, \texttt{total\_prevalent}, \texttt{high\_risk\_count}, \texttt{high\_risk\_pct}, \texttt{sort\_key}, \texttt{sort\_order}.
+Two-layer rows: per-cluster detail (\texttt{sort\_order = 0}) + grand total (\texttt{sort\_order = 2}, \texttt{── ALL CLUSTERS ──}). Output columns: \texttt{year}, \texttt{health\_cluster}, \texttt{total\_prediab\_population}, \texttt{high\_risk\_count}, \texttt{high\_risk\_pct}, \texttt{sort\_key}, \texttt{sort\_order}.
 
 \subsubsection{Interpretation Guide}
 \begin{itemize}[leftmargin=*]
-    \item \textbf{High HR \% in a cluster} (within a condition): that cluster's prevalent pool is dominated by the highest-concern cases. Clinical outreach and tighter follow-up should be prioritized there.
-    \item \textbf{Low \texttt{total\_prevalent} but high HR \%}: under-diagnosis of mild cases in the cluster --- cases are surfacing only when they already carry multiple risk factors.
-    \item \textbf{Large \texttt{total\_prevalent} but low HR \%}: detection is catching cases earlier; the prevalent pool is mostly low-risk.
-    \item \textbf{Empty section for a condition}: no risk factors have been defined in the config. The report is silent rather than producing zero-filled rows. See §8.5 for caveats.
+    \item \textbf{High HR \% in a cluster}: that cluster concentrates the most immediate-to-progress prediabetes cases. Outreach for lifestyle intervention and glucose monitoring should be prioritized there.
+    \item \textbf{Low \texttt{total\_prediab\_population} but high HR \%}: under-diagnosis of mild prediabetes in that cluster --- prediabetes is being recognized primarily when multiple risk factors are already present.
+    \item \textbf{Large \texttt{total\_prediab\_population} but low HR \%}: screening is catching prediabetes earlier; the cluster's prediabetes pool is mostly low-risk and could be candidates for watchful-waiting rather than intensive intervention.
 \end{itemize}
 
 \subsubsection{Relationship to Reports 4--6}
-Like Reports 4--6, Report 7 sits in Module 2 (it operates on the prevalent cohort). It differs in scope: Reports 4--6 are \emph{condition-specific} views repeated per condition, whereas Report 7 is a \emph{single generic view} parameterized across all five conditions. Conceptually it answers a different question (``who among our diagnosed patients carries the most clinical risk?'') from Reports 4--6 (``how well is disease being managed?''), but the denominator convention is identical --- and the config-driven join makes it the natural place for future cross-condition risk-profile extensions.
+Like Reports 4--6, Report 7 sits in Module 2 (it operates on the prevalent cohort). Conceptually it answers a different question (``who among our diagnosed patients carries the most clinical risk?) from Reports 4--6 (``how well is disease being managed?), but the denominator convention is identical. The view is \textbf{currently Prediabetes-specific} (filtered to \texttt{condition = 'prediab'} in \texttt{stg\_high\_risk\_patient}); when other conditions add risk factors via the config table, the corresponding \texttt{rpt\_{cond}\\_prevalence\_high\_risk\_annual} view will live in their own folders, mirroring the structure used for \texttt{rpt\_prediab\_prevalence\_high\_risk\_annual}. A cross-condition aggregator can be reintroduced at the top level at that point if needed.
 
-% --------------------------------------------------------------------------
 \subsection{Report 4 --- Control Level (Annual)}
 % --------------------------------------------------------------------------
 
