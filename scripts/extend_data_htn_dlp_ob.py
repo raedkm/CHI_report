@@ -269,6 +269,44 @@ add_dx("P10", "2025-02-18", "E66", "Obesity")    # incident Feb
 add_dx("P12", "2024-10-01", "E66", "Obesity")    # pre-existing
 
 # ===========================================================================
+# PREDIABETES (PREDIAB) — Risk-factor data for P22, P23, P24
+# ===========================================================================
+# P22: BMI 27 (≥25) + HTN dx 2023 → 2 factors = high-risk
+# P23: BMI 26 (≥25) + HTN 2024 + DLP 2023 → 3 factors = high-risk
+# P24: BMI 23 (<25) + no other factors + E28.2 (PCOS, exercises has_pcos flag)
+#      → 0 factors = NOT high-risk (PCOS alone is insufficient for high-risk)
+print("Adding Prediabetes risk-factor data (P22/P23/P24)...")
+for month in range(1, 13):
+    # Quarterly BMI readings
+    if month % 3 == 0:
+        add_bmi("P22", month, 27.0)     # ≥25 → has_bmi_ge_25
+        add_bmi("P23", month, 26.0)     # ≥25 → has_bmi_ge_25
+        add_bmi("P24", month, 23.0)     # <25 → has_bmi_ge_25 = FALSE
+    # Monthly BP for P22 (HTN patient) and P23 (HTN patient)
+    if month <= 6:
+        add_bp("P22", month, 132, 84)   # elevated HTN range
+    else:
+        add_bp("P22", month, 138, 88)
+    if month <= 4:
+        add_bp("P23", month, 130, 82)
+    else:
+        add_bp("P23", month, 136, 86)
+    # P24: normal BP
+    if month == 6:
+        add_bp("P24", month, 118, 76)
+    # Lipid panels — quarterly for P23 (DLP), normal for P24
+    if month % 3 == 0:
+        add_lipids("P22", month, 52, 115, 190, 130)   # female: HDL 52≥50 normal; rest normal
+        add_lipids("P23", month, 36, 165, 245, 215)   # male: HDL 36<40 abnormal; LDL abnormal
+        add_lipids("P24", month, 60, 110, 180, 110)   # female: all normal
+
+# Prediabetes risk-factor diagnoses
+add_dx("P22", "2023-05-15", "I10", "Essential hypertension")    # HTN → has_htn_dx
+add_dx("P23", "2024-08-10", "I10", "Essential hypertension")    # HTN → has_htn_dx
+add_dx("P23", "2023-11-22", "E78", "Dyslipidemia")              # DLP → has_dlp_dx
+add_dx("P24", "2022-06-01", "E28.2", "Polycystic ovaries")      # PCOS → has_pcos (only)
+
+# ===========================================================================
 # VERIFY
 # ===========================================================================
 print()
