@@ -4,18 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Community Health Indicators (CHI) reporting project. Generates **8 report types** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
+Community Health Indicators (CHI) reporting project. Generates **9 report types** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
 
-| Report | Frequency | What It Measures |
-|--------|-----------|-----------------|
-| **Screening Report** | Monthly | % of at-risk population tested for the condition (DM/HTN/DLP/OB only) |
-| **Prevalence Report** | Annual | % of total population with the condition at year-end |
-| **Incidence Report** | Monthly | Rate of new cases developing among at-risk population |
-| **Control Level Report** | Annual | Disease control classification for diagnosed patients using configurable thresholds |
-| **Care Gap (Quarterly)** | Quarterly | % of diagnosed patients completing follow-up visits/labs each quarter |
-| **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (0-4) |
-| **Prediabetes Incidence** | Monthly | Rate of new R73.03 (prediabetes) diagnoses per 100k at-risk |
-| **High-Risk Prediabetes Prevalence** | Annual | % of R73-prevalent patients with ≥2 risk factors (BMI ≥25, HTN, DLP, family history, GDM, PCOS) |
+| Report | Frequency | What It Measures | Module |
+|--------|-----------|-----------------|--------|
+| **Screening Report** | Monthly | % of at-risk population tested for the condition (DM/HTN/DLP/OB only) | M1 |
+| **Prevalence Report** | Annual | % of total population with the condition at year-end (all 5 conditions) | M1 |
+| **Incidence Report** | Monthly | Rate of new cases developing among at-risk population (all 5 conditions) | M1 |
+| **Control Level Report** | Annual | Disease control classification for diagnosed patients (per condition) | M2 |
+| **Care Gap (Quarterly)** | Quarterly | % of diagnosed patients completing follow-up visits/labs each quarter (per condition) | M2 |
+| **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (per condition) | M2 |
+| **High-Risk Patients (Generic)** | Annual | % of prevalent patients with ≥2 risk factors (parameterized per condition via `chi_high_risk_factors`; v1 covers Prediabetes only) | M2 |
 
 ### Chronic Conditions & Their Data Sources
 
@@ -37,7 +36,8 @@ The production Snowflake queries are organized as **modular views** in `project_
 
 ```
 project_queries/views/
-├── 00_config.sql              -- CHI_REPORTING.chi_config, chi_control_thresholds, chi_care_gap_config
+├── 00_config.sql                  -- CHI_REPORTING.chi_config + chi_control_thresholds + chi_care_gap_config + chi_high_risk_factors
+├── 00a_high_risk_views.sql        -- stg_high_risk_patient, rpt_high_risk_patients_annual (GENERIC, parameterized by chi_high_risk_factors)
 │
 ├── dm_staging_views.sql       -- stg_dm_cohort, stg_dm_diagnosis, stg_dm_labs
 ├── dm_analytical_view.sql     -- stg_dm_patient_month (dual-unit FBS + A1C classification)
@@ -59,17 +59,18 @@ project_queries/views/
 ├── ob_report_views.sql        -- rpt_ob_screening/prevalence/incidence
 └── ob_monitoring_views.sql    -- stg_ob_control_patient, stg_ob_care_gap_quarterly, rpt_ob_control, rpt_ob_care_gap_quarterly, rpt_ob_care_gap_annual
 
--- Prediabetes (Module 1 only — no Module-2 monitoring views)
+-- Prediabetes (Module 1 only — no Module-2 monitoring views;
+-- the High-Risk Patients report is GENERIC and lives in 00a_high_risk_views.sql)
 project_queries/Prediabetes/
-├── prediab_staging_views.sql   -- stg_prediab_cohort (with 6 risk-factor flags), stg_prediab_diagnosis (R73.03 only)
-├── prediab_analytical_view.sql -- stg_prediab_patient_month
-└── prediab_report_views.sql    -- rpt_prediab_incidence_monthly, rpt_prediab_prevalence_high_risk_annual
+├── prediab_staging_views.sql     -- stg_prediab_cohort (with 6 risk-factor flags), stg_prediab_diagnosis (R73.03 only)
+├── prediab_analytical_view.sql   -- stg_prediab_patient_month
+└── prediab_report_views.sql      -- rpt_prediab_prevalence_annual, rpt_prediab_incidence_monthly
 ```
 
 ### View Dependency Chain (per condition)
 
 ```
-chi_config + chi_control_thresholds + chi_care_gap_config (shared)
+chi_config + chi_control_thresholds + chi_care_gap_config + chi_high_risk_factors (shared)
     ├──► stg_{cond}_cohort      (patient × year — demographics + diagnosis flags)
     ├──► stg_{cond}_diagnosis   (patient × diagnosis — ICD-10 records, ranked)
     └──► stg_{cond}_labs        (patient × visit — standardized lab/obs results)
@@ -84,16 +85,21 @@ chi_config + chi_control_thresholds + chi_care_gap_config (shared)
                             └──► stg_{cond}_care_gap_quarterly (prevalent patient × quarter)
                                     ├──► rpt_{cond}_care_gap_quarterly
                                     └──► rpt_{cond}_care_gap_annual
+
+chi_high_risk_factors (config-driven, no condition-specific source view)
+    └──► stg_high_risk_patient (per-condition prevalent patient × factor flags, risk_factor_count, is_high_risk)
+            └──► rpt_high_risk_patients_annual (generic Module-2 report; v1 covers Prediabetes only)
 ```
 
 ### Usage
 
 1. Run `00_config.sql` once to create the schema + config table
-2. Run `{cond}_staging_views.sql` → creates 3 staging views
-3. Run `{cond}_analytical_view.sql` → creates patient_month view
-4. Run `{cond}_report_views.sql` → creates 3 report views
-5. Debug any stage: `SELECT * FROM CHI_REPORTING.stg_htn_patient_month WHERE patient_key = 'P03'`
-6. Change year: `UPDATE CHI_REPORTING.chi_config SET report_year = 2026, ...` then re-run step 2-4
+2. Run `00a_high_risk_views.sql` → creates generic `stg_high_risk_patient` + `rpt_high_risk_patients_annual`
+3. Run `{cond}_staging_views.sql` → creates 3 staging views
+4. Run `{cond}_analytical_view.sql` → creates patient_month view
+5. Run `{cond}_report_views.sql` → creates 3 report views
+6. Debug any stage: `SELECT * FROM CHI_REPORTING.stg_htn_patient_month WHERE patient_key = 'P03'`
+7. Change year: `UPDATE CHI_REPORTING.chi_config SET report_year = 2026, ...` then re-run step 3-5
 
 ### Parameterization
 
@@ -153,6 +159,8 @@ NMR.LEANHIS (Source EMR)
 - `level_order` (0-3) determines severity; GREATEST across markers = overall level
 
 **`chi_care_gap_config`** — Single-row config: `target_quarters_completed` (default: 3)
+
+**`chi_high_risk_factors`** — Configurable risk-factor definitions for the generic Module-2 High-Risk Patients report. Schema: `(condition, factor_code, factor_label, source_view, source_column, value_min, weight, requires_value, level_order)`. For v1 only Prediabetes has 6 factor rows (BMI ≥ 25, HTN dx, DLP dx, family-history placeholder, GDM history, PCOS via E28.2). To extend to a new condition: `INSERT` new rows + add a `CASE` branch in `stg_high_risk_patient.factor_evaluations`.
 
 ### Control Monitoring Markers
 
@@ -266,7 +274,7 @@ Local development/testing uses DuckDB. The simulation database is in `data/`; Py
 | `scripts/create_views_in_duckdb.py` | Creates all 44 CHI_REPORTING views incl. compliance & care gap (DuckDB dialect) |
 | `scripts/run_all_reports.py` | Config-driven runner for all 4 conditions — 6 reports each |
 
-Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|prediab|all]`
+Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|prediab|high_risk|all]`
 
 ### DuckDB → Snowflake Dialect Mapping
 
