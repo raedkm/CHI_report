@@ -13,3 +13,7 @@ data/chi_sim.db
 # OS
 .DS_Store
 Thumbs.db
+
+# Local reference materials (legacy SQL snapshots, LaTeX binaries)
+archive/
+tools/
