@@ -55,8 +55,8 @@
 This document defines the epidemiological methods underpinning the Community Health Indicators (CHI) reporting system. The system is organized into two methodologically distinct modules built on a common patient-month analytical grain across five chronic conditions: Diabetes Mellitus (DM), Hypertension (HTN), Dyslipidemia (DLP), Obesity (OB), and Prediabetes (PREDIAB).
 
 \begin{itemize}[leftmargin=*, itemsep=2pt]
-    \item \textbf{Module 1 --- Epidemiological Surveillance} answers \textit{how much disease exists and how fast is it appearing?} using monthly screening coverage, annual point prevalence, and monthly incidence reports. The DM, HTN, DLP, and OB conditions also include a Module-1 \emph{Screening} report. Two additional Module-1 reports target prediabetes specifically: \emph{Prediabetes Incidence} (monthly, ICD-10 R73.03) and \emph{High-Risk Prediabetes Prevalence} (annual, defined as R73.03 plus $\geq 2$ of: BMI $\geq$ 25, HTN dx, DLP dx, family-history placeholder, GDM dx, PCOS dx). Base population: \textbf{at-risk} cohort (undiagnosed) for Incidence; \textbf{R73-prevalent} cohort for the High-Risk Prevalence report. Thresholds: \textit{screening} cut-points.
-    \item \textbf{Module 2 --- Compliance \& Care Gap} answers \textit{of those with disease, how well are we managing them and closing follow-up gaps?} using three report types: annual disease control classification, quarterly follow-up completion, and annual care-gap distribution. Base population: \textbf{prevalent} cohort (diagnosed). Thresholds: \textit{control} targets. (Prediabetes has no Module-2 reports in this iteration.)
+    \item \textbf{Module 1 --- Epidemiological Surveillance} answers \textit{how much disease exists and how fast is it appearing?} using monthly screening coverage (DM/HTN/DLP/OB only), annual point prevalence (all 5 conditions including Prediabetes), and monthly incidence reports (all 5 conditions including Prediabetes). Base population: \textbf{at-risk} cohort (undiagnosed) for Incidence; \textbf{total eligible} cohort for Prevalence. Thresholds: \textit{screening} cut-points.
+    \item \textbf{Module 2 --- Compliance \& Care Gap} answers \textit{of those with disease, how well are we managing them?} using four report families: annual disease control classification (per condition), quarterly follow-up completion (per condition), annual care-gap distribution (per condition), and the \emph{generic} High-Risk Patients report (parameterized across conditions via the \texttt{chi\_high\_risk\_factors} config table; for v1 only Prediabetes is populated). Base population: \textbf{prevalent} cohort (diagnosed). Thresholds: \textit{control} targets plus condition-specific risk-factor definitions.
 \end{itemize}
 
 We describe the study design, cohort definitions, at-risk population dynamics, screening and control thresholds, rate calculation formulas, health cluster stratification, and the assumptions and limitations of each measure. The document serves as the methodological reference for analysts, epidemiologists, and public health practitioners interpreting CHI report outputs.
@@ -77,7 +77,7 @@ Retrospective cohort study using electronic medical record (EMR) data from the \
 One calendar year (January 1 -- December 31), configurable via the \texttt{CHI\_REPORTING.chi\_config} parameter table. Changing the report year requires updating a single row; all downstream views reference this configuration.
 
 \subsection{Unit of Analysis}
-The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly observations. The patient-month is the analytical grain from which all eight epidemiological measures --- screening, prevalence, incidence (Module~1), prediabetes incidence (Module~1), high-risk prediabetes prevalence (Module~1), control, quarterly care gap, annual care gap (Module~2) --- are derived.
+The \textbf{patient-month}. Each eligible patient contributes up to 12 monthly observations. The patient-month is the analytical grain from which all 10 epidemiological measures --- screening, prevalence, incidence, prediabetes prevalence, prediabetes incidence (Module~1), and the generic high-risk patients report (any condition), control, quarterly care gap, annual care gap (Module~2) --- are derived.
 
 \subsection{Data Sources}
 
@@ -175,7 +175,7 @@ The at-risk cohort is used \textbf{only by Module 1} (Reports 1 and 3) and inclu
 \end{itemize}
 
 \paragraph{Prediabetes patients and the DM at-risk pool.}
-A patient with a prediabetes ICD-10 code (R73.03) is, by definition, a known diabetic-risk patient with no formal DM diagnosis. They are therefore included in the DM at-risk pool (they can be screened and can become an incident E11 case). However, for the \textbf{new Prediabetes reports} (Reports 7 and 8), the at-risk pool is \textbf{inverted}: prediabetes patients (R73.03 prevalent) are \emph{excluded} from the prediabetes at-risk pool, because they are the \emph{prevalent} cohort for the new reports. The two cohorts (\texttt{is\_in\_at\_risk} for DM reports vs.\ \texttt{is\_in\_at\_risk\_prediab} for the new prediabetes reports) are deliberately inverse --- see §6.6 and §6.7.
+A patient with a prediabetes ICD-10 code (R73.03) is, by definition, a known diabetic-risk patient with no formal DM diagnosis. They are therefore included in the DM at-risk pool (they can be screened and can become an incident E11 case). However, for the \textbf{Prediabetes Incidence report} (§6.3), the at-risk pool is \textbf{inverted}: prediabetes patients (R73.03 prevalent) are \emph{excluded} from the prediabetes at-risk pool, because they are the \emph{prevalent} cohort for the report. The two cohorts (\texttt{is\_in\_at\_risk} for DM reports vs.\ \texttt{is\_in\_at\_risk\_prediab} for the Prediabetes Incidence report) are deliberately inverse.
 
 \subsection{Dynamic Cohort Membership}
 
@@ -223,7 +223,7 @@ Three epidemiological reasons:
 \section{Screening Thresholds}
 % ============================================================================
 
-Screening thresholds classify \textbf{at-risk} patients (Module 1 base population) into Normal / Elevated / Abnormal categories based on the most recent screening test result. These cut-points are used by Module 1's Screening report (Report 1) only. Module 2 uses a separate set of control thresholds (§7.4) that classify \textit{prevalent} patients into control tiers.
+Screening thresholds classify \textbf{at-risk} patients (Module 1 base population) into Normal / Elevated / Abnormal categories based on the most recent screening test result. These cut-points are used by Module 1's Screening report (Report 1) only. Module 2 uses a separate set of control thresholds (§7.5) that classify \textit{prevalent} patients into control tiers.
 
 \subsection{Diabetes Mellitus}
 
@@ -503,6 +503,25 @@ Incidence rates are expressed per 100,000 population to produce readable numbers
 \paragraph{Rationale for January denominator.}
 Using a fixed baseline (the population at risk on January 1) provides a stable denominator for comparison across clusters and years. Summing monthly denominators would make later months' cases appear more concentrated as the at-risk pool shrinks. The January baseline answers: \textit{Of the population at risk on January 1, how many developed the condition during the year?}
 
+\paragraph{Per-condition target codes.}
+\begin{table}[ht]
+\centering\small
+\caption{Per-condition code sets and at-risk pool semantics for the Incidence report}
+\begin{tabular}{@{}p{0.20\textwidth} p{0.20\textwidth} p{0.16\textwidth} p{0.34\textwidth}@{}}
+\toprule
+\textbf{Condition} & \textbf{Prevalent Code Set} & \textbf{Target Code} & \textbf{At-Risk Pool Semantics} \\
+\midrule
+Diabetes Mellitus (DM) & E10, E11, E13, E14, O24 & E11 & Excludes DM patients; \textbf{includes} R73.03 prediabetes patients \\
+Hypertension (HTN) & I10, I11, I12, I13, I15 & I10 & Excludes HTN patients \\
+Dyslipidemia (DLP) & E78 & E78 & Excludes DLP patients \\
+Obesity (OB) & E66 & E66 & Excludes OB patients \\
+\textbf{Prediabetes (PREDIAB)} & \textbf{R73.03} & \textbf{R73.03} & \textbf{Excludes R73.03 patients (inverse of DM)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Prediabetes incidence} is structurally identical to the DM/HTN/DLP/OB incidence reports — same formula, same at-risk pool mechanics. The single difference is the inverse at-risk semantics: R73.03 patients are \emph{prevalent} (not at-risk) for this report, so they drop out of the denominator. See the callout in §3.2 for the rationale. SQL view: \texttt{rpt\_prediab\_incidence\_monthly}.
+
 % --------------------------------------------------------------------------
 \subsection{Monthly vs.\ Annual Rate Calculations}
 % --------------------------------------------------------------------------
@@ -559,7 +578,7 @@ Health clusters represent organizational units (geographic regions, facility cat
     \item Which clusters have patients with no PHC assignment?
 \end{itemize}
 
-Cluster stratification is applied identically in Module 2 (Reports 4--6) and in the two new Module-1 Prediabetes reports (§6.6 and §6.7); see §7 for Module-2-specific rate forms.
+Cluster stratification is applied identically across all Module 1 and Module 2 reports; see §7 for the Module-2-specific rate forms.
 
 \subsubsection{Method}
 Health cluster is a \textbf{patient-level attribute} from \texttt{NMR.LEANHIS.PHC\_ASSIGNMENT}. It is attached at the cohort level and flows through to all reports:
@@ -575,104 +594,18 @@ Each cluster's rate is calculated independently using that cluster's own numerat
 \subsubsection{Unassigned Patients}
 Patients with no PHC record are labeled `Unassigned' and reported as a separate group. This is methodologically important: if unassigned patients have systematically different screening rates or disease burden, it may indicate a data quality issue or a genuinely underserved population.
 
-% --------------------------------------------------------------------------
-\subsection{Report 7 --- Prediabetes Incidence (Monthly Rate)}
-% --------------------------------------------------------------------------
-
-\subsubsection{Epidemiological Question}
-How rapidly is prediabetes (R73.03) being newly diagnosed across the eligible adult population?
-
-\subsubsection{Measure Type}
-Monthly incidence rate --- the rate at which prediabetes diagnoses are newly recorded, per 100{,}000 of the at-risk population. Direct counterpart of Report 3 specialized to prediabetes.
-
-\subsubsection{ICD-10 Code}
-\textbf{Target code}: \texttt{R73.03} only (Prediabetes). Other R73 variants (\texttt{R73.02} impaired glucose tolerance; \texttt{R73.09} other abnormal glucose) are \emph{not} counted.
-
-\subsubsection{Base Population}
-At-risk cohort at the start of each month (§3.2 inverted --- see callout above). Unlike the DM at-risk pool, the Prediabetes at-risk pool \textbf{excludes} patients already diagnosed with R73.03. The pool is the universe of eligible adults who have \emph{not} yet been told they have prediabetes.
-
-\subsubsection{Dynamic Cohort Membership}
-A patient diagnosed with R73.03 in month \textit{M} leaves the at-risk pool for all months \textit{M+1} through December. Subsequent re-entries are not modeled --- prediabetes is treated as a one-way transition into the prevalent cohort.
-
-\subsubsection{Monthly Formula}
-\begin{equation}
-\text{Incidence Rate}_m = \frac{\text{New R73.03 cases in month } m}{\text{At-risk population at start of month } m} \times 100{,}000
-\end{equation}
-
-Numerator = patients with first-ever \texttt{R73.03} diagnosis falling within the calendar boundaries of month \textit{m}, conditioned on being at-risk at month start.
-
-Denominator = patients who, on the first day of month \textit{m}, are in the eligible population AND have no prior \texttt{R73.03} diagnosis.
-
-\subsubsection{Annual Rate (Subtotal / Grand Total Rows)}
-\begin{equation}
-\text{Annual Incidence Rate} = \frac{\sum_{m=1}^{12} \text{New cases}_m}{\text{At-risk at Jan 1}} \times 100{,}000
-\end{equation}
-
-Same convention as Report 3: cluster subtotals and the grand total row use the \textbf{January at-risk baseline} as denominator to avoid counting mid-year prevalent patients twice.
-
-\subsubsection{Relationship to Report 3}
-Report 7 is structurally identical to Report 3 (DM incidence), with one substitution: \texttt{first\_e11\_date} $\rightarrow$ \texttt{first\_r73\_date}. The two reports are mutually consistent --- a patient who is an R73.03 incident case in month \textit{M} contributes to Report 7 that month, and may or may not subsequently become an E11 incident case (a progression), at which point they enter Report 3.
-
-% --------------------------------------------------------------------------
-\subsection{Report 8 --- High-Risk Prediabetes Prevalence (Annual)}
-% --------------------------------------------------------------------------
-
-\subsubsection{Epidemiological Question}
-Of all patients diagnosed with prediabetes by year-end, what proportion carry $\geq 2$ high-risk factors that signal imminent progression to Type 2 diabetes?
-
-\subsubsection{Measure Type}
-Clinical risk-stratification prevalence --- an annual snapshot of how concentrated the high-risk burden is within the prediabetes population. Distinct from a public-health denominator (which would be the total population) --- see the denominator note below.
-
-\subsubsection{Definition: High-Risk Prediabetes}
-A patient is \textbf{high-risk prediabetic} if, at the point of evaluation:
-\begin{enumerate}[leftmargin=*]
-    \item They carry an \texttt{R73.03} diagnosis \textbf{AND}
-    \item They have \textbf{$\geq 2$ risk factors} from the following six:
-    \begin{itemize}[leftmargin=*]
-        \item \textbf{BMI $\geq$ 25} --- from the patient's most recent body-mass index reading of the report year (\texttt{OBSERVATIONS} with \texttt{NAME = 'BMI'}); values 10--80 only.
-        \item \textbf{Hypertension diagnosis} --- reuses \texttt{stg\_htn\_cohort.has\_any\_htn\_diagnosis} (ICD-10 I10--I15, any date).
-        \item \textbf{Dyslipidemia diagnosis} --- reuses \texttt{stg\_dlp\_cohort.has\_any\_dlp\_diagnosis} (ICD-10 E78, any date).
-        \item \textbf{First-degree family history of diabetes} --- \textbf{placeholder}, hardcoded \texttt{FALSE} across all patients. The flag is wired in the cohort view so that adding a real source (e.g., Z83.3 family-history records) requires only a CTE substitution.
-        \item \textbf{Gestational diabetes history} --- reuses \texttt{stg\_dm\_cohort.has\_gdm} (ICD-10 O24, any date).
-        \item \textbf{PCOS / PMOS} --- proxy via \texttt{DIAGNOSIS\_CODES.ICD10\_CODE = 'E28.2'} (polycystic ovary syndrome). Known imperfect proxy --- see §8.4.
-    \end{itemize}
-\end{enumerate}
-
-\subsubsection{Base Population (Denominator)}
-\textbf{All R73-prevalent patients at year-end} = patients with \texttt{first\_r73\_date IS NOT NULL AND first\_r73\_date < report\_end}. The denominator is intentionally the \emph{prediabetes} population, not the total population. This is a clinical risk-stratification lens: ``of patients already known to have prediabetes, what fraction are the highest-concern cases?''
-
-Public-health framing (denominator = total population) is intentionally \emph{not} used here --- it would answer a different question (``what fraction of all adults are high-risk prediabetic?'') and belongs in a separate Module-1 report if needed.
-
-\subsubsection{Formula}
-\begin{equation}
-\text{High-Risk Pct}_{\text{cluster}} = \frac{\text{Prediab patients with }is\_high\_risk\_prediab = \text{TRUE} \text{ (cluster)}}{\text{Prediab patients at year-end (cluster)}} \times 100
-\end{equation}
-
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Numerator}: prediab patients where the cohort view's \texttt{is\_high\_risk\_prediab} flag is \texttt{TRUE} (i.e.\ \texttt{risk\_factor\_count >= 2}).
-    \item \textbf{Denominator}: prediab patients with \texttt{first\_r73\_date < report\_end}. Eligible (\texttt{is\_in\_total\_population = TRUE}) AND prevalent (\texttt{has\_prediabetes = TRUE}).
-\end{itemize}
-
-\subsubsection{Report Structure}
-Two-layer rows, per-cluster detail (\texttt{sort\_order = 0}) + grand total (\texttt{sort\_order = 2}). No cluster-subtotal layer because each cluster is its own row.
-
-Output columns: \texttt{year}, \texttt{health\_cluster}, \texttt{total\_prediab\_population}, \texttt{high\_risk\_count}, \texttt{high\_risk\_pct}, \texttt{sort\_key}, \texttt{sort\_order}.
-
-\subsubsection{Interpretation Guide}
-\begin{itemize}[leftmargin=*]
-    \item \textbf{High HR \% in a cluster}: That cluster concentrates the most immediate-to-progress prediabetes cases. Outreach for lifestyle intervention and glucose monitoring should be prioritized there.
-    \item \textbf{Low \texttt{total\_prediab\_population} but high HR \%}: Suggests under-diagnosis of mild prediabetes in that cluster --- prediabetes is being recognized primarily when multiple risk factors are already present.
-    \item \textbf{Large \texttt{total\_prediab\_population} but low HR \%}: Suggests screening is catching prediabetes earlier; the cluster's prediabetes pool is mostly low-risk and could be candidates for watchful-waiting rather than intensive intervention.
-\end{itemize}
-
-\subsubsection{Relationship to Reports 4--6}
-Report 8 differs structurally from the Module 2 reports (4--6), even though it sits next to them in the document. It does \textbf{not} measure disease control, care-gap completion, or follow-up; it measures static risk-factor composition of the prevalent prediabetes pool. It is grouped with the Module 2 reports only because it is Module-1 incident pre-DM information and there is no Module 2 for prediabetes.
 
 % ============================================================================
 \section{Module 2: Compliance \& Care Gap}
 % ============================================================================
 
-Module 2 answers: \textit{Of those with disease, how well are we managing them and closing follow-up gaps?} Three reports derive from the \textbf{prevalent} cohort (§3.1), using \textbf{control thresholds} (§7.4).
+Module 2 answers: \textit{Of those with disease, how well are we managing them and closing follow-up gaps?} Module 2 reports derive from the \textbf{prevalent} cohort (§3.1). Four report families:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Report 4} --- Control Level (Annual) --- disease control classification using §7.5
+    \item \textbf{Report 5} --- Care Gap (Quarterly) --- follow-up completion rates
+    \item \textbf{Report 6} --- Care Gap (Annual) --- annual distribution of follow-up completeness
+    \item \textbf{Report 7} --- High-Risk Patients (Annual) --- \emph{generic}, parameterized by condition via \texttt{chi\_high\_risk\_factors}; for v1 only Prediabetes is populated. Covers all 5 conditions.
+\end{itemize}
 
 \subsection{Module 2 Preamble}
 
@@ -681,12 +614,12 @@ The base population for all Module 2 reports is the \textbf{prevalent cohort at 
 
 \paragraph{Reference date.}
 \begin{itemize}[leftmargin=*]
-    \item For \textbf{Report 4} (Control Level) and \textbf{Report 6} (Care Gap Annual): the prevalent cohort is evaluated as of the end of the report year (December 31). This matches the point-prevalence reference date used by Report 2.
+    \item For \textbf{Report 4} (Control Level), \textbf{Report 6} (Care Gap Annual), and \textbf{Report 7} (High-Risk Patients): the prevalent cohort is evaluated as of the end of the report year (December 31).
     \item For \textbf{Report 5} (Care Gap Quarterly): the prevalent cohort is evaluated at the start of each quarter, so quarters-completed counts include all patients diagnosed before that quarter began.
 \end{itemize}
 
 \paragraph{Configuration.}
-All control thresholds and the quarterly target are stored in dedicated config tables --- \texttt{CHI\_REPORTING.chi\_control\_thresholds} and \texttt{CHI\_REPORTING.chi\_care\_gap\_config} --- rather than hardcoded in views. Updating thresholds does not require view re-creation; only the config tables are updated.
+All control thresholds, the quarterly target, and the high-risk-factor definitions are stored in dedicated config tables --- \texttt{CHI\_REPORTING.chi\_control\_thresholds}, \texttt{CHI\_REPORTING.chi\_care\_gap\_config}, and \texttt{CHI\_REPORTING.chi\_high\_risk\_factors} --- rather than hardcoded in views. Updating thresholds or risk factors does not require view re-creation; only the config tables are updated.
 
 \paragraph{Condition-specific follow-up markers.}
 Each condition defines a marker that indicates a meaningful follow-up visit:
@@ -707,6 +640,104 @@ OB  & $\geq 1$ BMI measurement that quarter \\
 \end{table}
 
 % --------------------------------------------------------------------------
+\subsection{Report 7 --- High-Risk Patients (Annual)}
+% --------------------------------------------------------------------------
+
+\subsubsection{Epidemiological Question}
+Of patients diagnosed with a given condition by year-end, what proportion carry $\geq 2$ risk factors that signal imminent progression or complication --- and therefore warrant elevated clinical attention?
+
+\subsubsection{Measure Type}
+\textbf{Clinical risk stratification} --- an annual prevalence-of-risk-factor-burden snapshot per condition. The denominator is the \textbf{prevalent cohort at year-end} (Module 2 convention, like Reports 4--6), and the numerator is the subset of prevalent patients whose risk-factor count exceeds the configurable threshold.
+
+This is a \emph{generic} report: the underlying view (\texttt{rpt\_high\_risk\_patients\_annual}) runs across all five conditions in one pass, parameterized by the \texttt{chi\_high\_risk\_factors} config table. For v1 only Prediabetes is populated, but the report is designed to extend to any condition with one SQL-only change (INSERT more config rows).
+
+\subsubsection{Definition: High-Risk}
+A patient is \textbf{high-risk} for condition \textit{C} if, at year-end:
+\begin{enumerate}[leftmargin=*]
+    \item They carry the condition's target ICD-10 code (prevalent at year-end) \textbf{AND}
+    \item They have \textbf{$\geq N$ weighted risk factors} (default $N = 2$) drawn from condition-specific rows in \texttt{chi\_high\_risk\_factors}.
+\end{enumerate}
+
+For v1 Prediabetes, the 6 risk factors are documented in the new §7.1.1 below.
+
+\paragraph{§7.1.1: Prediabetes risk factors (v1).}
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{@{}p{0.32\textwidth} p{0.42\textwidth} p{0.18\textwidth}@{}}
+\toprule
+\textbf{Factor} & \textbf{Source} & \textbf{Detail} \\
+\midrule
+BMI $\geq$ 25 & \texttt{stg\_prediab\_cohort.has\_bmi\_ge\_25} & Latest 2025 BMI reading (10--80 range) \\
+Hypertension dx & \texttt{stg\_prediab\_cohort.has\_htn\_dx} & Reuses \texttt{stg\_htn\_cohort.has\_any\_htn\_diagnosis} \\
+Dyslipidemia dx & \texttt{stg\_prediab\_cohort.has\_dlp\_dx} & Reuses \texttt{stg\_dlp\_cohort.has\_any\_dlp\_diagnosis} \\
+First-degree family hx of DM & \emph{(sentinel)} & \textbf{Hardcoded FALSE} --- placeholder until structured family-history source is wired in \\
+Gestational DM history & \texttt{stg\_prediab\_cohort.has\_gdm\_history} & Reuses \texttt{stg\_dm\_cohort.has\_gdm} (O24) \\
+PCOS / PMOS & \texttt{stg\_prediab\_cohort.has\_pcos} & ICD-10 E28.2 (polycystic ovary syndrome) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Base Population (per condition)}
+For each condition, the denominator is \textbf{all patients whose target ICD-10 code is present at year-end} (\texttt{first\_target\_date < report\_end}). For Prediabetes: \texttt{first\_r73\_date < report\_end}. For DM: \texttt{first\_e11\_date < report\_end}. Etc.
+
+\subsubsection{Configuration: chi\_high\_risk\_factors}
+The risk-factor definitions live in a config table (mirrors the \texttt{chi\_control\_thresholds} pattern). Schema:
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{@{}p{0.22\textwidth} p{0.10\textwidth} p{0.60\textwidth}@{}}
+\toprule
+\textbf{Column} & \textbf{Type} & \textbf{Purpose} \\
+\midrule
+\texttt{condition} & VARCHAR & \texttt{'dm'} / \texttt{'htn'} / \texttt{'dlp'} / \texttt{'ob'} / \texttt{'prediab'} \\
+\texttt{factor\_code} & VARCHAR & Short identifier (e.g.\ \texttt{'bmi\_ge\_25'}) \\
+\texttt{factor\_label} & VARCHAR & Display name for the report \\
+\texttt{source\_view} & VARCHAR & View/table to LEFT JOIN (e.g.\ \texttt{'CHI\_REPORTING.stg\_htn\_cohort'}) \\
+\texttt{source\_column} & VARCHAR & Boolean column on that view; use \texttt{'always\_false'} sentinel for unimplemented factors \\
+\texttt{value\_min} & DECIMAL(10,2) & Numeric threshold (BMI $\geq$ 25); NULL for flag-based factors \\
+\texttt{weight} & INTEGER & Contribution to \texttt{risk\_factor\_count} (default 1) \\
+\texttt{requires\_value} & BOOLEAN & TRUE = numeric threshold; FALSE = boolean flag \\
+\texttt{level\_order} & INTEGER & Display order in the report \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Extending to a new condition} (e.g.\ adding High-Risk logic to DM):
+\begin{enumerate}[leftmargin=*]
+    \item INSERT new rows into \texttt{chi\_high\_risk\_factors} with \texttt{condition = 'dm'}
+    \item Add a \texttt{CASE} branch in \texttt{stg\_high\_risk\_patient.factor\_evaluations} for the new \texttt{source\_view}/\texttt{source\_column} pair
+    \item No view re-creation required --- the report auto-detects new conditions at query time
+\end{enumerate}
+
+For v1 only Prediabetes is wired through \texttt{stg\_high\_risk\_patient}. Other conditions return zero rows because their source columns are not yet referenced in the view's CASE chain.
+
+\subsubsection{Generic Formula}
+\begin{equation}
+\text{High-Risk Pct}_{C, \text{cluster}} = \frac{\text{Prevalent patients of condition } C \text{ in cluster with risk\_factor\_count} \geq N}{\text{Prevalent patients of condition } C \text{ in cluster}} \times 100
+\end{equation}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Numerator}: condition-\textit{C} prevalent patients where \texttt{is\_high\_risk = TRUE} (i.e.\ their \texttt{risk\_factor\_count} $\geq N$).
+    \item \textbf{Denominator}: condition-\textit{C} prevalent patients at year-end.
+\end{itemize}
+
+\subsubsection{Report Structure}
+Two-layer rows per condition: detail (\texttt{sort\_order=0}, per cluster) + grand total (\texttt{sort\_order=2}, \texttt{── ALL CLUSTERS ──}). For conditions with no factors defined, the section is omitted entirely (no zero-filled rows; the report only appears for populated conditions).
+
+Output columns: \texttt{condition}, \texttt{health\_cluster}, \texttt{total\_prevalent}, \texttt{high\_risk\_count}, \texttt{high\_risk\_pct}, \texttt{sort\_key}, \texttt{sort\_order}.
+
+\subsubsection{Interpretation Guide}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{High HR \% in a cluster} (within a condition): that cluster's prevalent pool is dominated by the highest-concern cases. Clinical outreach and tighter follow-up should be prioritized there.
+    \item \textbf{Low \texttt{total\_prevalent} but high HR \%}: under-diagnosis of mild cases in the cluster --- cases are surfacing only when they already carry multiple risk factors.
+    \item \textbf{Large \texttt{total\_prevalent} but low HR \%}: detection is catching cases earlier; the prevalent pool is mostly low-risk.
+    \item \textbf{Empty section for a condition}: no risk factors have been defined in the config. The report is silent rather than producing zero-filled rows. See §8.5 for caveats.
+\end{itemize}
+
+\subsubsection{Relationship to Reports 4--6}
+Like Reports 4--6, Report 7 sits in Module 2 (it operates on the prevalent cohort). It differs in scope: Reports 4--6 are \emph{condition-specific} views repeated per condition, whereas Report 7 is a \emph{single generic view} parameterized across all five conditions. Conceptually it answers a different question (``who among our diagnosed patients carries the most clinical risk?'') from Reports 4--6 (``how well is disease being managed?''), but the denominator convention is identical --- and the config-driven join makes it the natural place for future cross-condition risk-profile extensions.
+
+% --------------------------------------------------------------------------
 \subsection{Report 4 --- Control Level (Annual)}
 % --------------------------------------------------------------------------
 
@@ -721,7 +752,7 @@ OB  & $\geq 1$ BMI measurement that quarter \\
 
 \subsubsection{Formula --- Patient-Level Classification}
 
-For each prevalent patient, the most recent monitoring marker value(s) within the report year are extracted and classified against the control thresholds (§7.4):
+For each prevalent patient, the most recent monitoring marker value(s) within the report year are extracted and classified against the control thresholds (§7.5):
 
 \begin{equation}
 \text{level\_order}_{\text{patient}} = \max_{m \in \text{markers}} \left( \text{level\_order}( \text{value}_{m}, \text{thresholds}_{m} ) \right)
@@ -1006,7 +1037,7 @@ The care-gap module partitions the report year into four calendar quarters and a
 
 \subsubsection{Quarter Boundaries}
 
-See Report 5 (§7.2) for the quarter-month mapping. Q1 = months 1--3, Q2 = 4--6, Q3 = 7--9, Q4 = 10--12. Boundaries align with calendar quarters.
+See Report 5 (§7.3) for the quarter-month mapping. Q1 = months 1--3, Q2 = 4--6, Q3 = 7--9, Q4 = 10--12. Boundaries align with calendar quarters.
 
 \subsubsection{Follow-Up "Completed" Criteria}
 
@@ -1072,15 +1103,23 @@ The quarterly target (default: 3 quarters) is stored in \texttt{chi\_care\_gap\_
 \end{enumerate}
 
 \subsection{Prediabetes-Specific Limitations}
-These apply to Reports 7 and 8 (Prediabetes Incidence, High-Risk Prediabetes Prevalence):
+These apply to the \textbf{Prediabetes-specific} Module-1 reports (Prediabetes Annual Prevalence [Report 2] and Prediabetes Monthly Incidence [Report 3]):
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Family history of diabetes is hardcoded FALSE across all patients}. The \texttt{has\_family\_history\_diabetes} column in \texttt{stg\_prediab\_cohort} is a placeholder wired as \texttt{FALSE} for everyone. When a structured family-history source becomes available (e.g., a \texttt{FAMILY\_HISTORY} table with code Z83.3), only the \texttt{family\_history\_flag} CTE needs to be replaced --- all downstream logic (including the \texttt{risk\_factor\_count} and \texttt{is\_high\_risk\_prediab} derivations) updates automatically.
-    \item \textbf{E28.2 is an imperfect PMOS proxy}. \texttt{E28.2} (polycystic ovary syndrome) is the closest standard ICD-10 code to ``polyendocrine metabolic ovarian syndrome,'' but it captures only \emph{diagnosed} PCOS. Undiagnosed or alternative-coding patients (e.g., coded as \texttt{N86}/\texttt{N90.x} endometrial conditions) are missed. The flag also includes a small number of androgen-excess conditions other than true PCOS.
-    \item \textbf{BMI is the patient's latest 2025 reading}, not the first. This deliberately captures the most current body composition but biases toward end-of-year visits --- patients seen only in Q1 may have stale or absent BMI data.
-    \item \textbf{No prediabetes-specific screening lab} is captured in the EMR's standard observation set. FBS and A1C exist as \emph{DM} screening markers; they are not modeled as prediabetes screening markers here. As a result, there is \textbf{no Module-1 Screening Report for Prediabetes} --- only Incidence and High-Risk Prevalence.
-    \item \textbf{R73.03 / R73.* scope is locked to R73.03}. Other \texttt{R73.*} codes (e.g., \texttt{R73.02} impaired glucose tolerance; \texttt{R73.09} other abnormal glucose) are \emph{not} counted in the prediabetes at-risk / prevalent cohorts. If broader inclusion becomes clinically warranted, the \texttt{WHERE} clause in \texttt{stg\_prediab\_cohort.prediab\_diagnosis\_summary} and the \texttt{stg\_prediab\_diagnosis} view are the only changes required.
-    \item \textbf{Progression cases contribute to both Report 7 and Report 8}. A patient diagnosed with \texttt{R73.03} in June who is later diagnosed with \texttt{E11} in October appears in Report 7's June detail row (R73.03 incident) AND in Report 8's high-risk-prevalence denominator at year-end (R73.03 prevalent). The reports are mutually consistent --- incidence asks ``when was R73.03 \emph{first} applied?'' and prevalence asks ``who carried the diagnosis by Dec 31?'' --- but readers should not interpret them as disjoint cohorts.
-    \item \textbf{Risk-factor flags are carried as constants in \texttt{stg\_prediab\_patient\_month}}. They are evaluated against the patient's full-year history (R73 diagnosis, BMI latest, HTN/DLP/GDM/PMOS dx) and then joined into every patient-month row. This is an intentional design choice for query performance and consistency; it does mean that a flag added \emph{after} a patient's mid-year record was loaded would not retroactively affect older months. There is no such case in the current data model.
+    \item \textbf{R73.03 / R73.* scope is locked to R73.03}. Other \texttt{R73.*} codes (e.g., \texttt{R73.02} impaired glucose tolerance; \texttt{R73.09} other abnormal glucose) are \emph{not} counted in the prediabetes at-risk / prevalent cohorts. If broader inclusion becomes clinically warranted, the \texttt{WHERE} clauses in \texttt{stg\_prediab\_cohort.prediab\_diagnosis\_summary} and \texttt{stg\_prediab\_diagnosis} are the only changes required.
+    \item \textbf{Prediabetes at-risk pool excludes R73.03 patients (inverse of DM)}. The DM at-risk pool \emph{includes} patients with R73.03 (they can be screened and become incident E11 cases); the Prediabetes at-risk pool \emph{excludes} them (they're prevalent). The two cohorts are deliberately inverse --- see §3.2.
+    \item \textbf{No prediabetes-specific screening lab} is captured in the EMR's standard observation set. FBS and A1C exist as \emph{DM} screening markers; they are not modeled as prediabetes screening markers here. As a result, there is \textbf{no Module-1 Screening Report for Prediabetes} --- only Prevalence (annual) and Incidence (monthly).
+    \item \textbf{Risk-factor flags (BMI latest, HTN dx, DLP dx, family-history placeholder, GDM, PCOS) are computed in \texttt{stg\_prediab\_cohort}}. They are needed by both the old \texttt{is\_high\_risk\_prediab} column on that view and the generic High-Risk Patients report. Keeping them on the cohort view (pred-iabetes-specific) avoids recomputing per month.
+\end{enumerate}
+
+\subsection{Generic High-Risk Limitations}
+These apply to the \textbf{generic} Module-2 High-Risk Patients report (Report 7):
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{v1 covers only Prediabetes}. For DM, HTN, DLP, and OB the \texttt{chi\_high\_risk\_factors} config table has no rows, so the report produces no output for those conditions. Extending to a new condition requires (a) \texttt{INSERT} rows into \texttt{chi\_high\_risk\_factors} with the appropriate \texttt{source\_view} / \texttt{source\_column} pairs, and (b) extending the \texttt{CASE} chain in \texttt{stg\_high\_risk\_patient.factor\_evaluations} to recognize the new \texttt{source\_column} values.
+    \item \textbf{Family-history placeholder wired as \texttt{always\_false} sentinel}. The \texttt{chi\_high\_risk\_factors.source\_column = 'always\_false'} pattern returns \texttt{FALSE} for every patient --- the report treats this factor as ``not yet implemented.'' When a real source exists (e.g., a \texttt{FAMILY\_HISTORY} table with ICD-10 Z83.3), the sentinel row is replaced by a row pointing at the real view/column. No SQL change in \texttt{stg\_high\_risk\_patient} is needed beyond ensuring the new \texttt{source\_column} is named in the CASE chain.
+    \item \textbf{Minimum factor threshold ($N = 2$) is hardcoded} in \texttt{stg\_high\_risk\_patient}. A future extension could add a \texttt{min\_factors\_for\_high\_risk} column to \texttt{chi\_high\_risk\_factors} (per-condition) and parameterize the view. For v1 the constant is fine --- every condition in the foreseeable future will use 2.
+    \item \textbf{Per-condition source\_view joins are inlined in the view's CASE chain} (not driven by the config table's \texttt{source\_view} value). This is a deliberate v1 simplification: \texttt{source\_view} and \texttt{source\_column} in the config are documentation/audit labels, but the actual JOIN logic lives in \texttt{stg\_high\_risk\_patient}. A future extension could replace the CASE chain with a stored procedure that does dynamic SQL driven by the config.
+    \item \textbf{Conditions with 0 factors produce no rows} in \texttt{rpt\_high\_risk\_patients\_annual} (not zero-filled placeholder rows). Reading the report requires the reader to know which conditions are active --- by design, an empty section is a strong signal that no risk factors have been configured yet.
+    \item \textbf{The report is silent when the patient's prevalent cohort is empty} (e.g., zero OB-prevalent patients in a cluster). This is correct behaviour; the row simply doesn't appear in the output.
 \end{enumerate}
 
 % ============================================================================
@@ -1089,7 +1128,7 @@ These apply to Reports 7 and 8 (Prediabetes Incidence, High-Risk Prediabetes Pre
 
 \begin{table}[ht]
 \centering\small
-\caption{Summary of all rate formulas (8 reports across 2 modules)}
+\caption{Summary of all rate formulas (10 reports across 2 modules)}
 \begin{tabular}{@{}p{0.10\textwidth} p{0.16\textwidth} p{0.34\textwidth} p{0.34\textwidth}@{}}
 \toprule
 \textbf{Module} & \textbf{Report} & \textbf{Detail Row Formula} & \textbf{Subtotal / Grand Total Formula} \\
@@ -1104,15 +1143,18 @@ $\dfrac{\text{Prevalent}_{\text{Dec 31}}}{\text{Total Pop}_{\text{Jan 1}}} \time
 & Incidence &
 $\dfrac{\text{New Cases}_m}{\text{At-Risk}_m} \times 100{,}000$ &
 $\dfrac{\sum\text{New Cases}_m}{\text{At-Risk}_{\text{Jan}}} \times 100{,}000$ (annualized) \\[10pt]
+& Prediabetes Prevalence &
+--- (annual only) &
+$\dfrac{\text{R73-prevalent}_{\text{Dec 31}}}{\text{Total Pop}_{\text{Jan 1}}} \times 100$ \\[14pt]
 & Prediabetes Incidence &
 $\dfrac{\text{New R73.03}_m}{\text{At-risk prediab}_m} \times 100{,}000$ &
-$\dfrac{\sum\text{New R73.03}_m}{\text{At-risk prediab}_{\text{Jan}}} \times 100{,}000$ (annualized) \\[14pt]
-& High-Risk Prediab.\ Prevalence &
---- (annual only) &
-$\dfrac{\text{Prediab with risk\_factor\_count} \geq 2}{\text{Prediab at year-end}} \times 100$ \\[10pt]
+$\dfrac{\sum\text{New R73.03}_m}{\text{At-risk prediab}_{\text{Jan}}} \times 100{,}000$ (annualized) \\[10pt]
 \midrule
-\multirow{3}{*}{M2} &
-Control &
+\multirow{4}{*}{M2} &
+High-Risk Patients &
+--- (annual only) &
+$\dfrac{\text{Prevalent patients with risk\_factor\_count} \geq 2}{\text{Prevalent patients (per condition)}} \times 100$ \\[14pt]
+& Control &
 $\dfrac{\text{Pts in level}_{c}}{\text{Prevalent}_{c}} \times 100$ &
 $\dfrac{\sum\text{Pts in level}}{\sum\text{Prevalent}} \times 100$ \\[14pt]
 & Care Gap Q &
