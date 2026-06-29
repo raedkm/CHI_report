@@ -1783,11 +1783,14 @@ ORDER BY health_cluster, sort_order
 print(f"  rpt_prediab_prevalence_annual:         {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.rpt_prediab_prevalence_annual').fetchone()[0]} rows")
 
 # =====================================================================
-# HIGH-RISK PATIENTS (GENERIC) — STAGING + REPORTS
+# HIGH-RISK PATIENTS — GENERIC STAGING (per-condition)
 # =====================================================================
-# Generic Module-2 report parameterized by condition via chi_high_risk_factors.
-# For v1 only PREDIAB has factors defined; other conditions return zero rows.
-print("--- High-Risk Patients (Generic) ---")
+# stg_high_risk_patient: one row per (patient, condition), parameterized
+# across all 5 conditions via chi_high_risk_factors. Per-condition reports
+# are defined in each condition's own folder (see Prediabetes section below).
+# For v1 only PREDIAB has factors, so the staging view only emits rows
+# for PREDIAB patients.
+print("--- High-Risk Patients (Generic staging) ---")
 
 con.execute("""
 CREATE OR REPLACE VIEW CHI_REPORTING.stg_high_risk_patient AS
@@ -1848,40 +1851,41 @@ FROM factor_evals GROUP BY patient_key, condition
 """)
 print(f"  stg_high_risk_patient:      {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.stg_high_risk_patient').fetchone()[0]} rows")
 
+# =====================================================================
+# PREDIABETES HIGH-RISK REPORT (per-condition filter on stg_high_risk_patient)
+# =====================================================================
+# Prediabetes-specific Module-2 report. Reads the generic stg_high_risk_patient
+# and filters to condition='prediab'. v1 emits output only for PREDIAB because
+# that is the only condition with factors defined in chi_high_risk_factors.
+print("--- Prediabetes High-Risk Report ---")
+
 con.execute("""
-CREATE OR REPLACE VIEW CHI_REPORTING.rpt_high_risk_patients_annual AS
-WITH base AS (
-    SELECT hr.condition,
-           COALESCE(pc.health_cluster,
-                    dc.health_cluster,
-                    hc.health_cluster,
-                    lc.health_cluster,
-                    oc.health_cluster,
-                    'Unassigned') AS health_cluster,
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual AS
+WITH snap AS (
+    SELECT hr.patient_key,
+           COALESCE(pc.health_cluster, 'Unassigned') AS health_cluster,
            hr.is_high_risk
     FROM CHI_REPORTING.stg_high_risk_patient hr
-    LEFT JOIN CHI_REPORTING.stg_prediab_cohort pc ON pc.patient_key = hr.patient_key AND hr.condition='prediab'
-    LEFT JOIN CHI_REPORTING.stg_dm_cohort      dc ON dc.patient_key = hr.patient_key AND hr.condition='dm'
-    LEFT JOIN CHI_REPORTING.stg_htn_cohort     hc ON hc.patient_key = hr.patient_key AND hr.condition='htn'
-    LEFT JOIN CHI_REPORTING.stg_dlp_cohort     lc ON lc.patient_key = hr.patient_key AND hr.condition='dlp'
-    LEFT JOIN CHI_REPORTING.stg_ob_cohort      oc ON oc.patient_key = hr.patient_key AND hr.condition='ob'
+    LEFT JOIN CHI_REPORTING.stg_prediab_cohort pc
+            ON pc.patient_key = hr.patient_key
+    WHERE hr.condition = 'prediab'
 )
-SELECT condition, health_cluster,
-       COUNT(*) AS total_prevalent,
+SELECT 2025 AS year, health_cluster,
+       COUNT(*) AS total_prediab_population,
        SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END) AS high_risk_count,
        ROUND(SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0), 2) AS high_risk_pct,
        health_cluster AS sort_key, 0 AS sort_order
-FROM base GROUP BY condition, health_cluster
+FROM snap GROUP BY health_cluster
 UNION ALL
-SELECT condition, '── ALL CLUSTERS ──' AS health_cluster,
+SELECT 2025, '── ALL CLUSTERS ──' AS health_cluster,
        COUNT(*),
        SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END),
        ROUND(SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)*100.0/NULLIF(COUNT(*),0), 2),
-       '── ALL CLUSTERS ──' AS sort_key, 2 AS sort_order
-FROM base GROUP BY condition
-ORDER BY condition, sort_order, sort_key
+       '── 2025 ALL CLUSTERS ──' AS sort_key, 2 AS sort_order
+FROM snap
+ORDER BY sort_order, sort_key
 """)
-print(f"  rpt_high_risk_patients_annual:        {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.rpt_high_risk_patients_annual').fetchone()[0]} rows")
+print(f"  rpt_prediab_prevalence_high_risk_annual: {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual').fetchone()[0]} rows")
 
 # =====================================================================
 # FINAL VERIFICATION
@@ -1917,8 +1921,8 @@ checks = [
     ("PREDIAB prevalent year-end", "SELECT prevalent_prediab_count FROM CHI_REPORTING.rpt_prediab_prevalence_annual WHERE sort_order=2", 7),
     ("PREDIAB incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_prediab_incidence_monthly WHERE sort_order=0", 3),
     # High-Risk Patients (generic)
-    ("HR PREDIAB prevalent", "SELECT total_prevalent FROM CHI_REPORTING.rpt_high_risk_patients_annual WHERE sort_order=2 AND condition='prediab'", 7),
-    ("HR PREDIAB high-risk", "SELECT high_risk_count FROM CHI_REPORTING.rpt_high_risk_patients_annual WHERE sort_order=2 AND condition='prediab'", 3),
+    ("HR PREDIAB prevalent", "SELECT total_prediab_population FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual WHERE sort_order=2", 7),
+    ("HR PREDIAB high-risk", "SELECT high_risk_count FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual WHERE sort_order=2", 3),
 ]
 
 all_ok = True
