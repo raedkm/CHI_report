@@ -4,16 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Community Health Indicators (CHI) reporting project. Generates **6 report types** across **4 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
+Community Health Indicators (CHI) reporting project. Generates **8 report types** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema):
 
 | Report | Frequency | What It Measures |
 |--------|-----------|-----------------|
-| **Screening Report** | Monthly | % of at-risk population tested for the condition |
+| **Screening Report** | Monthly | % of at-risk population tested for the condition (DM/HTN/DLP/OB only) |
 | **Prevalence Report** | Annual | % of total population with the condition at year-end |
 | **Incidence Report** | Monthly | Rate of new cases developing among at-risk population |
 | **Control Level Report** | Annual | Disease control classification for diagnosed patients using configurable thresholds |
 | **Care Gap (Quarterly)** | Quarterly | % of diagnosed patients completing follow-up visits/labs each quarter |
 | **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (0-4) |
+| **Prediabetes Incidence** | Monthly | Rate of new R73.03 (prediabetes) diagnoses per 100k at-risk |
+| **High-Risk Prediabetes Prevalence** | Annual | % of R73-prevalent patients with ≥2 risk factors (BMI ≥25, HTN, DLP, family history, GDM, PCOS) |
 
 ### Chronic Conditions & Their Data Sources
 
@@ -23,8 +25,9 @@ Community Health Indicators (CHI) reporting project. Generates **6 report types*
 | **Hypertension (HTN)** | OBSERVATIONS only | Systolic BP, Diastolic BP |
 | **Dyslipidemia (DLP)** | LABRESULTS + OBSERVATIONS (UNION ALL) | HDL, LDL, Cholesterol, Triglyceride |
 | **Obesity (OB)** | OBSERVATIONS only | BMI |
+| **Prediabetes (PREDIAB)** | DIAGNOSIS_CODES only (R73.03); BMI joined inline for risk-factor classification | ICD-10 R73.03 |
 
-Key distinction: **HTN and Obesity use OBSERVATIONS only** (vitals/clinic measurements). **DM and DLP use both** LABRESULTS and OBSERVATIONS since these tests can be recorded in either table.
+Key distinction: **HTN and Obesity use OBSERVATIONS only** (vitals/clinic measurements). **DM and DLP use both** LABRESULTS and OBSERVATIONS since these tests can be recorded in either table. **Prediabetes** uses DIAGNOSIS_CODES (R73.03) for cohort membership and inline joins to BMI, HTN, DLP, GDM, and PCOS observations/diagnoses for the 6-factor risk profile.
 
 ## Project Queries — Modular Views (Primary)
 
@@ -55,6 +58,12 @@ project_queries/views/
 ├── ob_analytical_view.sql     -- stg_ob_patient_month (WHO BMI classification)
 ├── ob_report_views.sql        -- rpt_ob_screening/prevalence/incidence
 └── ob_monitoring_views.sql    -- stg_ob_control_patient, stg_ob_care_gap_quarterly, rpt_ob_control, rpt_ob_care_gap_quarterly, rpt_ob_care_gap_annual
+
+-- Prediabetes (Module 1 only — no Module-2 monitoring views)
+project_queries/Prediabetes/
+├── prediab_staging_views.sql   -- stg_prediab_cohort (with 6 risk-factor flags), stg_prediab_diagnosis (R73.03 only)
+├── prediab_analytical_view.sql -- stg_prediab_patient_month
+└── prediab_report_views.sql    -- rpt_prediab_incidence_monthly, rpt_prediab_prevalence_high_risk_annual
 ```
 
 ### View Dependency Chain (per condition)
@@ -257,7 +266,7 @@ Local development/testing uses DuckDB. The simulation database is in `data/`; Py
 | `scripts/create_views_in_duckdb.py` | Creates all 44 CHI_REPORTING views incl. compliance & care gap (DuckDB dialect) |
 | `scripts/run_all_reports.py` | Config-driven runner for all 4 conditions — 6 reports each |
 
-Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|all]`
+Usage: `uv run python scripts/run_all_reports.py [dm|htn|dlp|ob|prediab|all]`
 
 ### DuckDB → Snowflake Dialect Mapping
 
