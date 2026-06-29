@@ -115,4 +115,51 @@ INSERT INTO CHI_REPORTING.chi_care_gap_config VALUES (3, 2025);
 SELECT 'chi_control_thresholds' AS config_table, COUNT(*) AS rows
 FROM CHI_REPORTING.chi_control_thresholds
 UNION ALL
-SELECT 'chi_care_gap_config', COUNT(*) FROM CHI_REPORTING.chi_care_gap_config;
+SELECT 'chi_care_gap_config', COUNT(*) FROM CHI_REPORTING.chi_care_gap_config
+UNION ALL
+SELECT 'chi_high_risk_factors', COUNT(*) FROM CHI_REPORTING.chi_high_risk_factors;
+
+-- ============================================================================
+-- HIGH-RISK FACTORS — Configurable risk-factor definitions by condition
+-- ============================================================================
+-- Each row defines one risk factor for one condition. The High-Risk Patients
+-- report (Module 2, Report 7) reads from this table to identify which
+-- patients in a condition's prevalent cohort carry ≥ N weighted risk factors.
+--
+-- For v1, only PREDIAB is populated (the first condition the High-Risk
+-- report is being deployed for). Other conditions return zero rows in the
+-- report until their factors are added here — no schema change required.
+--
+-- Adding factors to a new condition:
+--   1. INSERT a new row for each risk factor
+--   2. The view auto-detects the new condition and produces output
+--   3. No SQL change needed
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS CHI_REPORTING.chi_high_risk_factors (
+    condition        VARCHAR,        -- 'dm', 'htn', 'dlp', 'ob', 'prediab'
+    factor_code      VARCHAR,        -- short identifier, e.g. 'bmi_ge_25', 'htn_dx'
+    factor_label     VARCHAR,        -- display name for the high-risk report
+    source_view      VARCHAR,        -- view/table to LEFT JOIN (e.g. 'CHI_REPORTING.stg_htn_cohort')
+    source_column    VARCHAR,        -- boolean column on that view (e.g. 'has_any_htn_diagnosis');
+                                    --   use 'always_false' as a sentinel for unimplemented factors
+    value_min        DECIMAL(10,2),  -- for value-based factors (e.g. BMI ≥ 25); NULL otherwise
+    weight           INTEGER,        -- contribution to risk_factor_count (default 1)
+    requires_value   BOOLEAN,        -- TRUE = numeric threshold (BMI); FALSE = boolean flag (dx)
+    level_order      INTEGER         -- display order in the report
+);
+
+DELETE FROM CHI_REPORTING.chi_high_risk_factors;
+
+-- PREDIAB — first condition, all 6 risk factors
+INSERT INTO CHI_REPORTING.chi_high_risk_factors VALUES
+('prediab', 'bmi_ge_25',               'BMI ≥ 25 (latest 2025)',         'CHI_REPORTING.stg_prediab_cohort', 'has_bmi_ge_25',            NULL, 1, FALSE, 1),
+('prediab', 'htn_dx',                  'Hypertension diagnosis',         'CHI_REPORTING.stg_prediab_cohort', 'has_htn_dx',               NULL, 1, FALSE, 2),
+('prediab', 'dlp_dx',                  'Dyslipidemia diagnosis',         'CHI_REPORTING.stg_prediab_cohort', 'has_dlp_dx',               NULL, 1, FALSE, 3),
+('prediab', 'family_history_diabetes', 'First-degree family hx of DM',   'chi_high_risk_factors',            'always_false',             NULL, 1, FALSE, 4),
+('prediab', 'gdm_history',             'Gestational DM history',         'CHI_REPORTING.stg_prediab_cohort', 'has_gdm_history',          NULL, 1, FALSE, 5),
+('prediab', 'pcos_e28_2',              'PCOS / PMOS proxy (E28.2)',     'CHI_REPORTING.stg_prediab_cohort', 'has_pcos',                 NULL, 1, FALSE, 6);
+
+-- Verify
+SELECT 'chi_high_risk_factors' AS config_table, COUNT(*) AS rows
+FROM CHI_REPORTING.chi_high_risk_factors;
