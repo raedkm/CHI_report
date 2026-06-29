@@ -1536,6 +1536,226 @@ print(f"  stg_ob_control_patient:     {con.execute('SELECT COUNT(*) FROM CHI_REP
 print(f"  stg_ob_care_gap_quarterly:  {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.stg_ob_care_gap_quarterly').fetchone()[0]} rows")
 
 # =====================================================================
+# PREDIABETES (PREDIAB) — STAGING
+# =====================================================================
+# No stg_prediab_labs — prediabetes has no lab of its own.
+# BMI ≥ 25 lookup is inlined in stg_prediab_cohort from OBSERVATIONS.
+print("--- PREDIAB Staging ---")
+
+con.execute("""
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_cohort AS
+WITH pop AS (
+    SELECT _ID AS patient_key, GENDERUID AS gender, DATEOFBIRTH,
+           DATEDIFF('year', DATEOFBIRTH, '2025-01-01') AS age_at_jan1,
+           CASE WHEN age_at_jan1 > 18 AND NATIONALID IS NOT NULL AND NATIONALID <> ''
+                 AND (DATEOFDEATH IS NULL OR DATEOFDEATH >= '2025-01-01')
+                THEN TRUE ELSE FALSE END AS is_in_total_population
+    FROM NMR.LEANHIS_PATIENTS WHERE DATEOFBIRTH <= '2007-01-01'
+),
+pdx AS (
+    SELECT PATIENTUID AS patient_key,
+           MIN(DIAGNOSIS_DATE) AS first_r73_date,
+           bool_or(TRIM(UPPER(ICD10_CODE))='R73.03') AS has_r73
+    FROM NMR.LEANHIS_DIAGNOSIS_CODES
+    WHERE TRIM(UPPER(ICD10_CODE)) = 'R73.03'
+    GROUP BY PATIENTUID
+),
+-- Risk factor 1: latest BMI in 2025 ≥ 25
+bmi_latest AS (
+    SELECT o.PATIENTUID AS patient_key,
+           arg_max(
+               TRY_CAST(regexp_extract(ov.RESULTVALUE, '[0-9]+(\\.[0-9]+)?') AS DECIMAL(10,2)),
+               pv.STARTDATE
+           ) AS latest_bmi_value
+    FROM NMR.LEANHIS_OBSERVATIONS o
+    JOIN NMR.LEANHIS_OBSERVATIONS_OBSERVATIONVALUES ov ON o._ID = ov.OBSERVATIONS_ID
+    JOIN NMR.LEANHIS_PATIENTVISITS pv ON o.PATIENTVISITUID = pv._ID
+    WHERE pv.STARTDATE >= '2025-01-01' AND pv.STARTDATE < '2026-01-01'
+      AND ov.NAME = 'BMI'
+      AND TRY_CAST(regexp_extract(ov.RESULTVALUE, '[0-9]+(\\.[0-9]+)?') AS DECIMAL(10,2)) BETWEEN 10 AND 80
+    GROUP BY o.PATIENTUID
+),
+-- Risk factor 2: HTN dx
+htn_flag AS (SELECT patient_key, has_any_htn_diagnosis FROM CHI_REPORTING.stg_htn_cohort),
+-- Risk factor 3: DLP dx
+dlp_flag AS (SELECT patient_key, has_any_dlp_diagnosis FROM CHI_REPORTING.stg_dlp_cohort),
+-- Risk factor 4: family history PLACEHOLDER — hardcoded FALSE (TODO: wire to real source)
+family_history_flag AS (SELECT DISTINCT patient_key, FALSE AS has_family_history_diabetes
+                        FROM CHI_REPORTING.stg_htn_cohort),
+-- Risk factor 5: GDM history
+gdm_flag AS (SELECT patient_key, has_gdm FROM CHI_REPORTING.stg_dm_cohort),
+-- Risk factor 6: PCOS via E28.2
+pcos_dx AS (
+    SELECT PATIENTUID AS patient_key,
+           bool_or(TRIM(UPPER(ICD10_CODE))='E28.2') AS has_pcos
+    FROM NMR.LEANHIS_DIAGNOSIS_CODES
+    WHERE TRIM(UPPER(ICD10_CODE)) = 'E28.2'
+    GROUP BY PATIENTUID
+),
+phc AS (SELECT PATIENTUID AS patient_key, HEALTH_CLUSTER AS health_cluster_raw
+        FROM NMR.LEANHIS_PHC_ASSIGNMENT)
+SELECT pop.patient_key, pop.gender, pop.age_at_jan1, pop.is_in_total_population,
+       COALESCE(phc.health_cluster_raw, 'Unassigned') AS health_cluster,
+       pdx.first_r73_date,
+       COALESCE(pdx.has_r73, FALSE) AS has_prediabetes,
+       COALESCE(bmi.latest_bmi_value >= 25.0, FALSE) AS has_bmi_ge_25,
+       COALESCE(htn.has_any_htn_diagnosis, FALSE) AS has_htn_dx,
+       COALESCE(dlp.has_any_dlp_diagnosis, FALSE) AS has_dlp_dx,
+       COALESCE(fh.has_family_history_diabetes, FALSE) AS has_family_history_diabetes,
+       COALESCE(gdm.has_gdm, FALSE) AS has_gdm_history,
+       COALESCE(pcos.has_pcos, FALSE) AS has_pcos,
+       (CASE WHEN bmi.latest_bmi_value >= 25.0                       THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(htn.has_any_htn_diagnosis, FALSE)          THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(dlp.has_any_dlp_diagnosis, FALSE)          THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(fh.has_family_history_diabetes, FALSE)     THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(gdm.has_gdm, FALSE)                        THEN 1 ELSE 0 END
+      + CASE WHEN COALESCE(pcos.has_pcos, FALSE)                      THEN 1 ELSE 0 END
+       ) AS risk_factor_count,
+       CASE WHEN (CASE WHEN bmi.latest_bmi_value >= 25.0                       THEN 1 ELSE 0 END
+                    + CASE WHEN COALESCE(htn.has_any_htn_diagnosis, FALSE)    THEN 1 ELSE 0 END
+                    + CASE WHEN COALESCE(dlp.has_any_dlp_diagnosis, FALSE)    THEN 1 ELSE 0 END
+                    + CASE WHEN COALESCE(fh.has_family_history_diabetes, FALSE) THEN 1 ELSE 0 END
+                    + CASE WHEN COALESCE(gdm.has_gdm, FALSE)                  THEN 1 ELSE 0 END
+                    + CASE WHEN COALESCE(pcos.has_pcos, FALSE)                THEN 1 ELSE 0 END
+                   ) >= 2
+            THEN TRUE ELSE FALSE END AS is_high_risk_prediab,
+       CASE WHEN pop.is_in_total_population AND COALESCE(pdx.has_r73, FALSE)
+            THEN TRUE ELSE FALSE END AS is_prediab_prevalent,
+       CASE WHEN pop.is_in_total_population AND NOT COALESCE(pdx.has_r73, FALSE)
+            THEN TRUE ELSE FALSE END AS is_in_at_risk_prediab
+FROM pop
+LEFT JOIN phc  USING (patient_key)
+LEFT JOIN pdx  USING (patient_key)
+LEFT JOIN bmi_latest bmi USING (patient_key)
+LEFT JOIN htn_flag htn USING (patient_key)
+LEFT JOIN dlp_flag dlp USING (patient_key)
+LEFT JOIN family_history_flag fh USING (patient_key)
+LEFT JOIN gdm_flag gdm USING (patient_key)
+LEFT JOIN pcos_dx pcos USING (patient_key)
+""")
+print(f"  stg_prediab_cohort:        {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.stg_prediab_cohort').fetchone()[0]} rows")
+
+con.execute("""
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_diagnosis AS
+SELECT PATIENTUID AS patient_key,
+       DIAGNOSIS_DATE AS diagnosis_date,
+       ICD10_CODE AS icd10_code,
+       DIAGNOSIS_DESCRIPTION AS icd10_description,
+       ROW_NUMBER() OVER (PARTITION BY PATIENTUID, ICD10_CODE ORDER BY DIAGNOSIS_DATE) AS diagnosis_rank
+FROM NMR.LEANHIS_DIAGNOSIS_CODES
+WHERE TRIM(UPPER(ICD10_CODE)) = 'R73.03'
+""")
+print(f"  stg_prediab_diagnosis:     {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.stg_prediab_diagnosis').fetchone()[0]} rows")
+
+# =====================================================================
+# PREDIABETES (PREDIAB) — ANALYTICAL
+# =====================================================================
+print("--- PREDIAB Analytical ---")
+
+con.execute("""
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_patient_month AS
+WITH visits AS (
+    SELECT PATIENTUID AS patient_key,
+           EXTRACT(YEAR FROM STARTDATE)*100 + EXTRACT(MONTH FROM STARTDATE) AS year_month_key
+    FROM NMR.LEANHIS_PATIENTVISITS
+    WHERE STARTDATE >= '2025-01-01' AND STARTDATE < '2026-01-01'
+    GROUP BY PATIENTUID, year_month_key
+),
+spine AS (
+    SELECT bc.*, m.year_month_key, m.report_month,
+           CASE WHEN bc.first_r73_date IS NOT NULL
+                 AND bc.first_r73_date < strptime(m.year_month_key::VARCHAR, '%Y%m')
+                THEN TRUE ELSE FALSE END AS has_r73_before,
+           CASE WHEN NOT (bc.first_r73_date IS NOT NULL
+                          AND bc.first_r73_date < strptime(m.year_month_key::VARCHAR, '%Y%m'))
+                THEN TRUE ELSE FALSE END AS is_prediab_at_risk_start
+    FROM CHI_REPORTING.stg_prediab_cohort bc
+    CROSS JOIN (
+        SELECT seq AS report_month, 2025*100+seq AS year_month_key
+        FROM (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12)) AS m(seq)
+    ) m
+    WHERE bc.is_in_total_population = TRUE
+)
+SELECT pms.*,
+       CASE WHEN v.patient_key IS NOT NULL THEN TRUE ELSE FALSE END AS had_visit,
+       CASE WHEN pms.first_r73_date IS NOT NULL
+             AND pms.first_r73_date >= strptime(pms.year_month_key::VARCHAR, '%Y%m')
+             AND pms.first_r73_date <  strptime(pms.year_month_key::VARCHAR, '%Y%m') + INTERVAL 1 MONTH
+             AND pms.is_prediab_at_risk_start
+            THEN TRUE ELSE FALSE END AS is_prediab_incident_case
+FROM spine pms
+LEFT JOIN visits v ON pms.patient_key=v.patient_key AND pms.year_month_key=v.year_month_key
+""")
+print(f"  stg_prediab_patient_month: {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.stg_prediab_patient_month').fetchone()[0]} rows")
+
+# =====================================================================
+# PREDIABETES (PREDIAB) — REPORTS
+# =====================================================================
+print("--- PREDIAB Reports ---")
+
+con.execute("""
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_incidence_monthly AS
+WITH m AS (
+    SELECT health_cluster, report_month, year_month_key,
+           COUNT(DISTINCT CASE WHEN is_prediab_at_risk_start THEN patient_key END) AS at_risk,
+           COUNT(DISTINCT CASE WHEN is_prediab_incident_case THEN patient_key END) AS incident,
+           ROUND(incident*100000.0/NULLIF(at_risk,0),2) AS rate
+    FROM CHI_REPORTING.stg_prediab_patient_month
+    GROUP BY health_cluster, report_month, year_month_key
+)
+SELECT 2025 AS year, health_cluster,
+       strftime(strptime(year_month_key::VARCHAR,'%Y%m'),'%b %Y') AS period,
+       at_risk, incident, rate,
+       year_month_key AS sort_key, 0 AS sort_order
+FROM m
+UNION ALL
+SELECT 2025, health_cluster, '── ' || health_cluster || ' TOTAL ──',
+       NULL, SUM(incident),
+       ROUND(SUM(incident)*100000.0/NULLIF(MAX(CASE WHEN report_month=1 THEN at_risk END),0),2),
+       99999, 1
+FROM m GROUP BY health_cluster
+UNION ALL
+SELECT 2025, '── ALL CLUSTERS ──', '── 2025 ALL CLUSTERS ──',
+       NULL, SUM(incident),
+       ROUND(SUM(incident)*100000.0/NULLIF(SUM(CASE WHEN report_month=1 THEN at_risk END),0),2),
+       99999, 2
+FROM m
+ORDER BY health_cluster, sort_order, sort_key
+""")
+print(f"  rpt_prediab_incidence_monthly:        {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.rpt_prediab_incidence_monthly').fetchone()[0]} rows")
+
+con.execute("""
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual AS
+WITH snap AS (
+    SELECT patient_key, health_cluster, first_r73_date, is_high_risk_prediab,
+           CASE WHEN first_r73_date IS NOT NULL AND first_r73_date < '2026-01-01'
+                THEN TRUE ELSE FALSE END AS is_prediab_prevalent_year_end
+    FROM CHI_REPORTING.stg_prediab_cohort WHERE is_in_total_population = TRUE
+)
+SELECT 2025 AS year, health_cluster,
+       COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end THEN patient_key END) AS total_prediab_population,
+       COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end AND is_high_risk_prediab THEN patient_key END) AS high_risk_count,
+       ROUND(
+           COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end AND is_high_risk_prediab THEN patient_key END)*100.0
+           / NULLIF(COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end THEN patient_key END), 0), 2
+       ) AS high_risk_pct,
+       health_cluster AS sort_key, 0 AS sort_order
+FROM snap GROUP BY health_cluster
+UNION ALL
+SELECT 2025, '── ALL CLUSTERS ──',
+       COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end THEN patient_key END),
+       COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end AND is_high_risk_prediab THEN patient_key END),
+       ROUND(
+           COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end AND is_high_risk_prediab THEN patient_key END)*100.0
+           / NULLIF(COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end THEN patient_key END), 0), 2
+       ),
+       '── 2025 ALL CLUSTERS ──' AS sort_key, 2 AS sort_order
+FROM snap
+ORDER BY sort_order, sort_key
+""")
+print(f"  rpt_prediab_prevalence_high_risk_annual: {con.execute('SELECT COUNT(*) FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual').fetchone()[0]} rows")
+
+# =====================================================================
 # FINAL VERIFICATION
 # =====================================================================
 print("\n" + "=" * 60)
@@ -1544,25 +1764,30 @@ print("=" * 60)
 
 checks = [
     # DM
-    ("DM at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dm_patient_month WHERE year_month_key=202501", 13),
-    ("DM at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dm_patient_month WHERE year_month_key=202512", 10),
+    ("DM at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dm_patient_month WHERE year_month_key=202501", 16),
+    ("DM at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dm_patient_month WHERE year_month_key=202512", 13),
     ("DM prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_dm_prevalence_annual WHERE sort_order=2", 5),
     ("DM incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_dm_incidence_monthly WHERE sort_order=0", 4),
     # HTN
-    ("HTN at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_htn_patient_month WHERE year_month_key=202501", 16),
-    ("HTN at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_htn_patient_month WHERE year_month_key=202512", 13),
-    ("HTN prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_htn_prevalence_annual WHERE sort_order=2", 4),
+    ("HTN at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_htn_patient_month WHERE year_month_key=202501", 17),
+    ("HTN at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_htn_patient_month WHERE year_month_key=202512", 14),
+    ("HTN prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_htn_prevalence_annual WHERE sort_order=2", 6),
     ("HTN incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_htn_incidence_monthly WHERE sort_order=0", 3),
     # DLP
-    ("DLP at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dlp_patient_month WHERE year_month_key=202501", 16),
-    ("DLP at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dlp_patient_month WHERE year_month_key=202512", 14),
-    ("DLP prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_dlp_prevalence_annual WHERE sort_order=2", 3),
+    ("DLP at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dlp_patient_month WHERE year_month_key=202501", 18),
+    ("DLP at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_dlp_patient_month WHERE year_month_key=202512", 16),
+    ("DLP prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_dlp_prevalence_annual WHERE sort_order=2", 4),
     ("DLP incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_dlp_incidence_monthly WHERE sort_order=0", 2),
     # OB
-    ("OB at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_ob_patient_month WHERE year_month_key=202501", 15),
-    ("OB at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_ob_patient_month WHERE year_month_key=202512", 14),
+    ("OB at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_ob_patient_month WHERE year_month_key=202501", 18),
+    ("OB at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_ob_patient_month WHERE year_month_key=202512", 17),
     ("OB prevalent", "SELECT prevalent FROM CHI_REPORTING.rpt_ob_prevalence_annual WHERE sort_order=2", 3),
     ("OB incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_ob_incidence_monthly WHERE sort_order=0", 1),
+    # PREDIAB
+    ("PREDIAB at-risk Jan", "SELECT COUNT(DISTINCT CASE WHEN is_prediab_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_prediab_patient_month WHERE year_month_key=202501", 16),
+    ("PREDIAB at-risk Dec", "SELECT COUNT(DISTINCT CASE WHEN is_prediab_at_risk_start THEN patient_key END) FROM CHI_REPORTING.stg_prediab_patient_month WHERE year_month_key=202512", 14),
+    ("PREDIAB prevalent year-end", "SELECT total_prediab_population FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual WHERE sort_order=2", 7),
+    ("PREDIAB incident total", "SELECT COALESCE(SUM(incident),0) FROM CHI_REPORTING.rpt_prediab_incidence_monthly WHERE sort_order=0", 3),
 ]
 
 all_ok = True
