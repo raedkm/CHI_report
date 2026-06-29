@@ -18,13 +18,15 @@
 
 ## Overview
 
-The CHI reporting system generates **3 report types** across **4 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema). Each report type targets a distinct epidemiological question:
+The CHI reporting system generates **3 Module-1 report types** across **5 chronic conditions** from an EMR database (Snowflake, `NMR.LEANHIS` schema). Module 2 (Compliance & Care Gap) is supported for 4 of the 5 conditions. Prediabetes contributes 2 Module-1 reports (incidence monthly, high-risk prevalence annual) but no Module-2 reports.
 
 | Report | Frequency | Question It Answers |
 |--------|-----------|---------------------|
-| **Screening Report** | Monthly | What % of the at-risk population is being tested each month? |
+| **Screening Report** | Monthly | What % of the at-risk population is being tested each month? (DM/HTN/DLP/OB only) |
 | **Prevalence Report** | Annual | What % of the total population has the condition at year-end? |
 | **Incidence Report** | Monthly | How many new cases are developing per 100,000 at-risk per month? |
+| **Prediabetes Incidence** | Monthly | How many new R73.03 (prediabetes) diagnoses per 100,000 prediabetes-at-risk per month? |
+| **High-Risk Prediabetes Prevalence** | Annual | Of prediabetes patients, what % carry ≥2 high-risk factors (BMI ≥25, HTN, DLP, family history, GDM, PCOS)? |
 
 ### Conditions Covered
 
@@ -34,6 +36,7 @@ The CHI reporting system generates **3 report types** across **4 chronic conditi
 | **Hypertension (HTN)** | I10–I15 | Systolic BP, Diastolic BP | OBSERVATIONS only |
 | **Dyslipidemia (DLP)** | E78 | HDL, LDL, Cholesterol, Triglyceride | LABRESULTS + OBSERVATIONS |
 | **Obesity (OB)** | E66 | BMI | OBSERVATIONS only |
+| **Prediabetes (PREDIAB)** | R73.03 | (no dedicated lab) | DIAGNOSIS_CODES (R73.03); BMI joined inline for risk-factor classification |
 
 > **Key distinction**: HTN and Obesity use OBSERVATIONS only (vitals/clinic measurements recorded at point of care). DM and DLP use both LABRESULTS and OBSERVATIONS (tests may be recorded in either table), combined via `UNION ALL`.
 
@@ -443,19 +446,21 @@ uv run python scripts/create_views_in_duckdb.py
 # Run reports
 uv run python scripts/run_all_reports.py all
 # Or: uv run python scripts/run_all_reports.py dm
+# Or: uv run python scripts/run_all_reports.py prediab
 ```
 
 ### Simulation Data Profile
 
 | Attribute | Details |
 |-----------|---------|
-| Total patients | 20 |
-| Eligible (total pop) | 17 |
-| Clusters | Cluster A (7), Cluster B (6), Cluster C (3), Unassigned (1) |
+| Total patients | 23 |
+| Eligible (total pop) | 21 |
+| Clusters | Cluster A (8), Cluster B (7), Cluster C (4), Unassigned (1) |
 | DM prevalent | 5, DM incident | 4 |
-| HTN prevalent | 4, HTN incident | 3 |
-| DLP prevalent | 3, DLP incident | 2 |
+| HTN prevalent | 6, HTN incident | 3 |
+| DLP prevalent | 4, DLP incident | 2 |
 | OB prevalent | 3, OB incident | 1 |
+| PREDIAB prevalent (year-end) | 7, PREDIAB incident | 3 |
 
 ### DuckDB → Snowflake Dialect Mapping
 
@@ -496,10 +501,14 @@ CHI_Report/
 │   │   ├── dlp_staging_views.sql
 │   │   ├── dlp_analytical_view.sql
 │   │   └── dlp_report_views.sql
-│   └── OBS/
-│       ├── ob_staging_views.sql
-│       ├── ob_analytical_view.sql
-│       └── ob_report_views.sql
+│   ├── OBS/
+│   │   ├── ob_staging_views.sql
+│   │   ├── ob_analytical_view.sql
+│   │   └── ob_report_views.sql
+│   └── Prediabetes/
+│       ├── prediab_staging_views.sql        ← stg_prediab_cohort + 6 risk-factor flags
+│       ├── prediab_analytical_view.sql      ← stg_prediab_patient_month
+│       └── prediab_report_views.sql         ← rpt_prediab_incidence_monthly + rpt_prediab_prevalence_high_risk_annual
 │
 ├── pyproject.toml                               ← Python project config
 ├── deploy_to_snowflake.py                       ← Deployment script generator
