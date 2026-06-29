@@ -28,7 +28,7 @@ The CHI reporting system generates **Module-1 reports** across **5 chronic condi
 | **Control Level Report** | Annual | What % of prevalent patients have disease under control per configurable thresholds? (DM/HTN/DLP/OB) | M2 |
 | **Care Gap (Quarterly)** | Quarterly | What % of prevalent patients completed follow-up that quarter? (DM/HTN/DLP/OB) | M2 |
 | **Care Gap (Annual)** | Annual | Distribution of patients by number of quarters with follow-up (DM/HTN/DLP/OB) | M2 |
-| **High-Risk Patients** | Annual | What % of prevalent patients carry ≥2 risk factors (parameterized per condition; v1 covers Prediabetes) | M2 |
+| **High-Risk Prediabetes Prevalence** | Annual | Of Prediabetes-prevalent patients, what % carry ≥2 high-risk factors (BMI ≥25, HTN, DLP, family history, GDM, PCOS)? | M2 |
 
 ### Conditions Covered
 
@@ -448,8 +448,7 @@ uv run python scripts/create_views_in_duckdb.py
 # Run reports
 uv run python scripts/run_all_reports.py all
 # Or: uv run python scripts/run_all_reports.py dm
-# Or: uv run python scripts/run_all_reports.py prediab
-# Or: uv run python scripts/run_all_reports.py high_risk (generic Module-2 report)
+# Or: uv run python scripts/run_all_reports.py prediab (runs Reports 2, 3, and 7 for Prediabetes)
 ```
 
 ### Simulation Data Profile
@@ -512,7 +511,8 @@ CHI_Report/
 │   └── Prediabetes/
 │       ├── prediab_staging_views.sql        ← stg_prediab_cohort + 6 risk-factor flags
 │       ├── prediab_analytical_view.sql      ← stg_prediab_patient_month
-│       └── prediab_report_views.sql         ← rpt_prediab_incidence_monthly + rpt_prediab_prevalence_high_risk_annual
+│       ├── prediab_report_views.sql         ← rpt_prediab_prevalence_annual + rpt_prediab_incidence_monthly
+│       └── prediab_high_risk_report.sql     ← rpt_prediab_prevalence_high_risk_annual (Module-2, v1 specific to PREDIAB)
 │
 ├── pyproject.toml                               ← Python project config
 ├── deploy_to_snowflake.py                       ← Deployment script generator
