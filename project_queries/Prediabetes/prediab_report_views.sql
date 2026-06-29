@@ -1,11 +1,17 @@
 -- ============================================================================
 -- PREDIABETES (PREDIAB) — REPORT VIEWS
 -- ============================================================================
--- Creates 2 Module-1 report views:
---   1. rpt_prediab_incidence_monthly          — Report 7
---   2. rpt_prediab_prevalence_high_risk_annual — Report 8
+-- Creates 2 Module-1 report views (standard Prediabetes reports, mirror of the
+-- DM/HTN/DLP/OB pattern):
+--   1. rpt_prediab_prevalence_annual     — Report 2 (standard annual prevalence)
+--   2. rpt_prediab_incidence_monthly     — Report 3 (standard monthly incidence)
 --
--- (No Module-2 monitoring views for prediabetes in this iteration.)
+-- The Prediabetes-specific HIGH-RISK PATIENTS report (formerly Report 8) has
+-- been moved to the GENERIC module-2 file: 00a_high_risk_views.sql as
+-- rpt_high_risk_patients_annual. It is no longer prediabetes-specific — for v1
+-- only PREDIAB has risk factors defined in chi_high_risk_factors, but the
+-- report is parameterized by condition and extendable to others without
+-- schema changes.
 --
 -- Each report emits rows with a `sort_order` column:
 --   • sort_order=0 — detail rows (per cluster / per cluster × month)
@@ -13,14 +19,17 @@
 --   • sort_order=2 — grand total ('-- ALL CLUSTERS --')
 --
 -- Prerequisites:
---   1. Run all Prediabetes staging + analytical views first
+--   1. Run 00_config.sql first (creates CHI_REPORTING.chi_config)
+--   2. Run Prediabetes/prediab_staging_views.sql
+--   3. Run Prediabetes/prediab_analytical_view.sql
 -- ============================================================================
 
 
 -- ############################################################################
--- REPORT 7: rpt_prediab_incidence_monthly
+-- REPORT 3: rpt_prediab_incidence_monthly
 -- ############################################################################
--- Reports the rate of NEW prediabetes (R73.03) diagnoses per 100,000
+-- Standard Module-1 incidence report for prediabetes (R73.03).
+-- Reports the rate of NEW prediabetes diagnoses per 100,000
 -- at-risk population per month, by health cluster.
 --
 -- Denominator: patients at-risk at start of month = no prior R73.03 diagnosis
@@ -28,6 +37,8 @@
 -- Rate:        per 100,000 at-risk population
 --
 -- Direct mirror of rpt_dm_incidence_monthly (3-layer UNION ALL).
+-- See §6.3 of epidemiological_methodology.md for the methodological context
+-- shared with the DM/HTN/DLP/OB incidence reports.
 -- ############################################################################
 
 CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_incidence_monthly AS
@@ -103,83 +114,86 @@ ORDER BY health_cluster, sort_order, sort_key;
 
 
 -- ############################################################################
--- REPORT 8: rpt_prediab_prevalence_high_risk_annual
+-- REPORT 2: rpt_prediab_prevalence_annual
 -- ############################################################################
--- Annual report: what % of prediabetes patients (R73.03 by year-end) carry
--- ≥2 high-risk factors (BMI ≥25, HTN dx, DLP dx, family history, GDM, PCOS).
+-- Standard Module-1 prevalence report for prediabetes (R73.03).
+-- Reports the % of the eligible population diagnosed with prediabetes by year-end.
 --
--- Denominator: all R73-prevalent patients at Dec 31 of report year
--- Numerator:   subset of those with is_high_risk_prediab = TRUE
--- Rate:        high-risk count / total prediab population × 100
+-- Denominator: total eligible population (is_in_total_population = TRUE) at year-end
+-- Numerator:   patients with first R73.03 diagnosis before report_end
+-- Rate:        prevalent / total × 100
 --
--- Two-layer rows (per-cluster detail + grand total).
+-- Direct mirror of rpt_dm_prevalence_annual. Two-layer rows (per-cluster
+-- detail + grand total). For prediabetes the target code is R73.03 only
+-- (no broader code set like DM's E10/E11/E13/E14/O24), so the "incident during
+-- year" sub-count simplifies.
 -- ############################################################################
 
-CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual AS
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_annual AS
 
-WITH year_end_snap AS (
+WITH prevalence_snapshot AS (
     SELECT
-        bc.patient_key,
-        bc.health_cluster,
-        cfg.report_year                         AS report_year,
-        (bc.first_r73_date IS NOT NULL
-         AND bc.first_r73_date < cfg.report_end)
-                                                AS is_prediab_prevalent_year_end,
-        bc.is_high_risk_prediab,
-        bc.risk_factor_count
-    FROM CHI_REPORTING.stg_prediab_cohort bc
+        patient_key,
+        first_r73_date,
+        CASE WHEN first_r73_date IS NOT NULL
+              AND first_r73_date < cfg.report_end
+             THEN TRUE ELSE FALSE
+        END                                     AS has_r73_at_year_end,
+        CASE WHEN first_r73_date >= cfg.report_start
+              AND first_r73_date < cfg.report_end
+             THEN TRUE ELSE FALSE
+        END                                     AS is_incident_this_year,
+        CASE WHEN first_r73_date < cfg.report_start
+             THEN TRUE ELSE FALSE
+        END                                     AS is_pre_existing
+    FROM CHI_REPORTING.stg_prediab_cohort
     CROSS JOIN CHI_REPORTING.chi_config cfg
-    WHERE bc.is_in_total_population = TRUE
 )
 
--- Detail rows (sort_order=0): per health cluster
+-- Per-cluster rows (sort_order=0)
 SELECT
-    report_year                              AS year,
-    health_cluster,
-    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                    THEN patient_key END)     AS total_prediab_population,
-    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                          AND is_high_risk_prediab
-                    THEN patient_key END)     AS high_risk_count,
-    ROUND(
-        COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                              AND is_high_risk_prediab
-                        THEN patient_key END)
-        * 100.0
-        / NULLIF(
-            COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                          THEN patient_key END), 0
-          ), 2
-    )                                         AS high_risk_pct,
-    health_cluster                            AS sort_key,
-    0                                         AS sort_order
-FROM year_end_snap
-GROUP BY health_cluster, report_year
+    cfg.report_year                             AS year,
+    bc.health_cluster,
+    COUNT(DISTINCT CASE WHEN bc.is_in_total_population = TRUE
+                    THEN bc.patient_key END)    AS total_population,
+    COUNT(DISTINCT CASE WHEN ps.has_r73_at_year_end = TRUE
+                    THEN bc.patient_key END)    AS prevalent_prediab_count,
+    COUNT(DISTINCT CASE WHEN ps.is_incident_this_year = TRUE
+                    THEN bc.patient_key END)    AS incident_during_year,
+    COUNT(DISTINCT CASE WHEN ps.is_pre_existing = TRUE
+                          AND ps.has_r73_at_year_end = TRUE
+                    THEN bc.patient_key END)    AS pre_existing_prediab_count,
+    ROUND(prevalent_prediab_count / NULLIF(total_population, 0) * 100, 4)
+                                                AS prevalence_rate_pct,
+    bc.health_cluster                           AS period_label,
+    0                                           AS sort_order
+FROM CHI_REPORTING.stg_prediab_cohort bc
+CROSS JOIN CHI_REPORTING.chi_config cfg
+LEFT JOIN prevalence_snapshot ps USING (patient_key)
+GROUP BY cfg.report_year, bc.health_cluster
 
 UNION ALL
 
--- Grand total (sort_order=2): all clusters combined
+-- Grand total row (sort_order=2)
 SELECT
-    report_year                              AS year,
-    '── ALL CLUSTERS ──'                    AS health_cluster,
-    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                    THEN patient_key END)     AS total_prediab_population,
-    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                          AND is_high_risk_prediab
-                    THEN patient_key END)     AS high_risk_count,
-    ROUND(
-        COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                              AND is_high_risk_prediab
-                        THEN patient_key END)
-        * 100.0
-        / NULLIF(
-            COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
-                          THEN patient_key END), 0
-          ), 2
-    )                                         AS high_risk_pct,
-    '── ' || report_year || ' ALL CLUSTERS ──' AS sort_key,
-    2                                         AS sort_order
-FROM year_end_snap
-GROUP BY report_year
+    cfg.report_year                             AS year,
+    '── ALL CLUSTERS ──'                       AS health_cluster,
+    COUNT(DISTINCT CASE WHEN bc.is_in_total_population = TRUE
+                    THEN bc.patient_key END)    AS total_population,
+    COUNT(DISTINCT CASE WHEN ps.has_r73_at_year_end = TRUE
+                    THEN bc.patient_key END)    AS prevalent_prediab_count,
+    COUNT(DISTINCT CASE WHEN ps.is_incident_this_year = TRUE
+                    THEN bc.patient_key END)    AS incident_during_year,
+    COUNT(DISTINCT CASE WHEN ps.is_pre_existing = TRUE
+                          AND ps.has_r73_at_year_end = TRUE
+                    THEN bc.patient_key END)    AS pre_existing_prediab_count,
+    ROUND(COUNT(DISTINCT CASE WHEN ps.has_r73_at_year_end = TRUE THEN bc.patient_key END)
+          / NULLIF(COUNT(DISTINCT CASE WHEN bc.is_in_total_population = TRUE THEN bc.patient_key END), 0) * 100, 4)
+                                                AS prevalence_rate_pct,
+    '── ' || cfg.report_year || ' ALL CLUSTERS ──' AS period_label,
+    2                                           AS sort_order
+FROM CHI_REPORTING.stg_prediab_cohort bc
+CROSS JOIN CHI_REPORTING.chi_config cfg
+LEFT JOIN prevalence_snapshot ps USING (patient_key)
 
-ORDER BY sort_order, sort_key;
+ORDER BY health_cluster, sort_order;
