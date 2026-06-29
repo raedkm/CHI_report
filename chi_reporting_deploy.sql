@@ -4732,18 +4732,21 @@ SELECT 'chi_high_risk_factors' AS config_table, COUNT(*) AS rows
 FROM CHI_REPORTING.chi_high_risk_factors;
 
 -- ============================================================================
--- HIGH-RISK PATIENTS (GENERIC) — STAGING + REPORT VIEWS
+-- HIGH-RISK PATIENTS (GENERIC) — STAGING VIEW
 -- ============================================================================
--- Creates 2 views that implement the generic High-Risk Patients report
--- (Module 2, Report 7). The report is parameterized by condition via the
--- chi_high_risk_factors config table (see 00_config.sql).
+-- Creates 1 generic staging view (stg_high_risk_patient). The per-condition
+-- report views (rpt_{cond}_prevalence_high_risk_annual) live in each
+-- condition's own folder (see Prediabetes/prediab_high_risk_report.sql for
+-- the Prediabetes report, appended after this section).
 --
--- For v1, only PREDIAB has factors defined. Other conditions return
--- zero-filled rows in the report. To extend: INSERT new rows into
--- chi_high_risk_factors — no SQL change required.
+-- For v1, only PREDIAB has factors defined in chi_high_risk_factors. To
+-- extend to other conditions: INSERT new rows into chi_high_risk_factors
+-- and create a corresponding rpt_{cond}_prevalence_high_risk_annual view
+-- in the condition's folder.
 --
 -- Prerequisites:
---   1. Run 00_config.sql first (creates CHI_REPORTING.chi_config + config tables)
+--   1. Run 00_config.sql first (creates CHI_REPORTING.chi_config + config
+--      tables, including chi_high_risk_factors)
 --   2. Run all per-condition staging views (so stg_*_cohort views exist for
 --      the risk-factor JOINs)
 --   3. Run Prediabetes/prediab_staging_views.sql so the 6 PREDIAB risk-factor
@@ -4752,7 +4755,7 @@ FROM CHI_REPORTING.chi_high_risk_factors;
 
 
 -- ############################################################################
--- VIEW 1: stg_high_risk_patient
+-- VIEW: stg_high_risk_patient
 -- ############################################################################
 -- Grain: one row per (patient, condition) per report year, for all conditions
 --        that have ≥1 risk factor defined in chi_high_risk_factors.
@@ -4918,67 +4921,107 @@ GROUP BY patient_key, condition, report_year;
 
 
 -- ############################################################################
--- VIEW 2: rpt_high_risk_patients_annual
+-- VIEW 2: rpt_high_risk_patients_annual — MOVED
 -- ############################################################################
--- Generic annual report: per condition, per cluster, count prevalent patients
--- who are flagged is_high_risk = TRUE. Denominator = condition-prevalent at
--- year-end. Numerator = subset with risk_factor_count >= 2.
+-- The cross-condition aggregator that was previously defined here has been
+-- moved. In v1 the report was only producing output for PREDIAB (the only
+-- condition with risk factors in chi_high_risk_factors), so it now lives at
+-- project_queries/Prediabetes/prediab_high_risk_report.sql as
+-- rpt_prediab_prevalence_high_risk_annual (prediabetes-specific).
 --
--- Output rows: one detail row (sort_order=0) per (condition, cluster) + one
--- grand total row (sort_order=2) per condition. For v1 only PREDIAB has
--- non-zero counts.
+-- When other conditions (DM, HTN, DLP, OB) add risk factors via the config
+-- table, the corresponding rpt_{cond}_prevalence_high_risk_annual views
+-- will live in their respective condition folders. A cross-condition
+-- aggregator can be reintroduced here at that point if needed.
 -- ============================================================================
 
-CREATE OR REPLACE VIEW CHI_REPORTING.rpt_high_risk_patients_annual AS
 
-WITH base AS (
+-- ============================================================================
+-- PREDIABETES (PREDIAB) — HIGH-RISK PATIENTS REPORT
+-- ============================================================================
+-- Creates 1 Module-2 report view for prediabetes:
+--   1. rpt_prediab_prevalence_high_risk_annual
+--
+-- Reads from the GENERIC stg_high_risk_patient view (project_queries/00a_high_risk_views.sql),
+-- filtering to condition = 'prediab' rows. v1 only emits output for PREDIAB
+-- because that is the only condition with risk factors defined in
+-- chi_high_risk_factors (see 00_config.sql).
+--
+-- This file lives in project_queries/Prediabetes/ because the v1 output is
+-- prediabetes-specific. When other conditions add risk factors via the
+-- config table, the corresponding `rpt_{cond}_prevalence_high_risk_annual`
+-- views will live in their respective condition folders; this file's
+-- report can be generalized into a cross-condition aggregator at that point
+-- (or remain as a thin per-condition wrapper).
+--
+-- Prerequisites:
+--   1. Run 00_config.sql first (creates CHI_REPORTING.chi_config +
+--      chi_control_thresholds + chi_care_gap_config + chi_high_risk_factors)
+--   2. Run Prediabetes/prediab_staging_views.sql
+--   3. Run 00a_high_risk_views.sql (creates the generic stg_high_risk_patient)
+-- ============================================================================
+
+
+-- ############################################################################
+-- REPORT: rpt_prediab_prevalence_high_risk_annual
+-- ############################################################################
+-- Annual Module-2 report: among prediabetes patients (R73.03 by year-end),
+-- what % carry ≥2 high-risk factors (BMI ≥25, HTN dx, DLP dx, family-history
+-- placeholder, GDM history, PCOS via E28.2)?
+--
+-- Denominator: Prediabetes-prevalent patients at year-end (R73.03 by Dec 31)
+-- Numerator:   subset of those flagged is_high_risk = TRUE by stg_high_risk_patient
+-- Rate:        high-risk count / total prediab population × 100
+--
+-- Two-layer rows (per-cluster detail + grand total). Same shape as
+-- rpt_prediab_prevalence_annual; differs in numerator definition
+-- (is_high_risk instead of any-prevalent).
+-- ============================================================================
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual AS
+
+WITH snap AS (
     SELECT
-        hr.condition,
+        hr.patient_key,
         COALESCE(pc.health_cluster, 'Unassigned')   AS health_cluster,
         hr.is_high_risk
     FROM CHI_REPORTING.stg_high_risk_patient hr
     LEFT JOIN CHI_REPORTING.stg_prediab_cohort pc
-            ON pc.patient_key = hr.patient_key AND hr.condition = 'prediab'
-    LEFT JOIN CHI_REPORTING.stg_dm_cohort dc
-            ON dc.patient_key = hr.patient_key AND hr.condition = 'dm'
-    LEFT JOIN CHI_REPORTING.stg_htn_cohort hc
-            ON hc.patient_key = hr.patient_key AND hr.condition = 'htn'
-    LEFT JOIN CHI_REPORTING.stg_dlp_cohort lc
-            ON lc.patient_key = hr.patient_key AND hr.condition = 'dlp'
-    LEFT JOIN CHI_REPORTING.stg_ob_cohort oc
-            ON oc.patient_key = hr.patient_key AND hr.condition = 'ob'
+            ON pc.patient_key = hr.patient_key
+    WHERE hr.condition = 'prediab'
 )
 
--- Detail rows (sort_order=0): per condition × cluster
+-- Detail rows (sort_order=0): per health cluster
 SELECT
-    condition,
+    2025                                                  AS year,
     health_cluster,
-    COUNT(*)                                          AS total_prevalent,
-    SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)     AS high_risk_count,
+    COUNT(*)                                              AS total_prediab_population,
+    SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)         AS high_risk_count,
     ROUND(
         SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0), 2
-    )                                                 AS high_risk_pct,
-    health_cluster                                    AS sort_key,
-    0                                                 AS sort_order
-FROM base
-GROUP BY condition, health_cluster
+        / NULLIF(COUNT(*), 0),
+        2
+    )                                                     AS high_risk_pct,
+    health_cluster                                        AS sort_key,
+    0                                                     AS sort_order
+FROM snap
+GROUP BY health_cluster
 
 UNION ALL
 
--- Grand total (sort_order=2): per condition
+-- Grand total row (sort_order=2): all clusters combined
 SELECT
-    condition,
-    '── ALL CLUSTERS ──'                            AS health_cluster,
-    COUNT(*)                                          AS total_prevalent,
-    SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)     AS high_risk_count,
+    2025                                                  AS year,
+    '── ALL CLUSTERS ──'                                AS health_cluster,
+    COUNT(*)                                              AS total_prediab_population,
+    SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END)         AS high_risk_count,
     ROUND(
         SUM(CASE WHEN is_high_risk THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0), 2
-    )                                                 AS high_risk_pct,
-    '── ALL CLUSTERS ──'                            AS sort_key,
-    2                                                 AS sort_order
-FROM base
-GROUP BY condition
+        / NULLIF(COUNT(*), 0),
+        2
+    )                                                     AS high_risk_pct,
+    '── 2025 ALL CLUSTERS ──'                            AS sort_key,
+    2                                                     AS sort_order
+FROM snap
 
-ORDER BY condition, sort_order, sort_key;
+ORDER BY sort_order, sort_key;
