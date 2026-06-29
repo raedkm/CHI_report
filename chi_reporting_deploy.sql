@@ -4129,3 +4129,546 @@ ORDER BY health_cluster, sort_order, sort_key;
 -- SELECT * FROM CHI_REPORTING.rpt_ob_care_gap_annual ORDER BY health_cluster, sort_order, sort_key;
 -- ============================================================================
 
+-- ============================================================================
+-- PREDIABETES (PREDIAB) — STAGING VIEWS
+-- ============================================================================
+-- Creates 2 staging views that extract and prepare source data:
+--   1. stg_prediab_cohort       — patient × year grain (demographics + 6 risk-factor flags)
+--   2. stg_prediab_diagnosis    — patient × diagnosis grain (ICD-10 R73.03 records only)
+--
+-- NO stg_prediab_labs — prediabetes has no lab of its own. The BMI ≥ 25 risk
+-- factor is computed inline in stg_prediab_cohort from OBSERVATIONS.
+--
+-- Prerequisites:
+--   1. Run 00_config.sql first (creates CHI_REPORTING.chi_config)
+--   2. Run Diabetes/dm_staging_views.sql (for has_gdm)
+--   3. Run HTN/htn_staging_views.sql   (for has_any_htn_diagnosis)
+--   4. Run DLP/dlp_staging_views.sql   (for has_any_dlp_diagnosis)
+--
+-- Data sources:
+--   NMR.LEANHIS.PATIENTS
+--   NMR.LEANHIS.PATIENTVISITS
+--   NMR.LEANHIS.OBSERVATIONS / OBSERVATIONS_OBSERVATIONVALUES
+--   NMR.LEANHIS.DIAGNOSIS_CODES  [PLACEHOLDER]
+-- ============================================================================
+
+
+-- ############################################################################
+-- VIEW 1: stg_prediab_cohort
+-- ############################################################################
+-- Grain: one row per patient per report year.
+-- Identifies every eligible patient and joins R73.03 diagnosis history plus
+-- 6 risk-factor flags (BMI ≥ 25, HTN dx, DLP dx, family-history PLACEHOLDER,
+-- GDM history, PCOS via E28.2).
+--
+-- IMPORTANT — at-risk vs prevalent semantics INVERTED vs DM cohort:
+--   • is_in_at_risk (DM cohort)        = eligible AND no DM dx  (INCLUDES R73)
+--   • is_in_at_risk_prediab (THIS view) = eligible AND no R73 dx (EXCLUDES R73)
+--   • is_prediab_prevalent (THIS view)  = eligible AND has R73 dx
+--
+-- Module-1 reports derived from this view (see prediab_report_views.sql):
+--   • Report 7: Prediabetes Incidence (Monthly)        — uses is_in_at_risk_prediab
+--   • Report 8: High-Risk Prediabetes Prevalence (Ann.)— uses is_prediab_prevalent
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_cohort AS
+
+WITH total_population AS (
+    SELECT
+        p._ID                                   AS patient_key,
+        p.GENDERUID                             AS gender,
+        p.DATEOFBIRTH                           AS date_of_birth,
+        DATEDIFF(YEAR, p.DATEOFBIRTH, cfg.report_start) AS age_at_jan1,
+        CASE WHEN age_at_jan1 > 18
+              AND p.NATIONALID IS NOT NULL
+              AND p.NATIONALID <> ''
+              AND (p.DATEOFDEATH IS NULL OR p.DATEOFDEATH >= cfg.report_start)
+             THEN TRUE ELSE FALSE
+        END                                     AS is_in_total_population
+    FROM NMR.LEANHIS.PATIENTS p
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE p.DATEOFBIRTH <= DATEADD(YEAR, -18, cfg.report_start)
+),
+
+-- Prediabetes diagnosis summary — R73.03 ONLY (the user's locked decision)
+prediab_diagnosis_summary AS (
+    SELECT
+        PATIENTUID                              AS patient_key,
+        MIN(DIAGNOSIS_DATE)                     AS first_r73_date,
+        BOOLOR_AGG(TRIM(UPPER(ICD10_CODE)) = 'R73.03')
+                                                AS has_r73
+    FROM NMR.LEANHIS.DIAGNOSIS_CODES                                -- [PLACEHOLDER]
+    WHERE TRIM(UPPER(ICD10_CODE)) = 'R73.03'                        -- [PLACEHOLDER]
+    GROUP BY PATIENTUID
+),
+
+-- Risk factor 1: latest BMI in 2025 ≥ 25
+-- arg_max(value, visit_date) picks the most recent reading of the report year
+bmi_latest AS (
+    SELECT
+        o.PATIENTUID                            AS patient_key,
+        MAX_BY(
+            TRY_TO_DECIMAL(
+                REGEXP_SUBSTR(ov.RESULTVALUE, '[0-9]+(\\.[0-9]+)?'),
+                10, 2
+            ),
+            pv.STARTDATE
+        )                                       AS latest_bmi_value
+    FROM NMR.LEANHIS.OBSERVATIONS o
+    JOIN NMR.LEANHIS.OBSERVATIONS_OBSERVATIONVALUES ov
+            ON o._ID = ov.OBSERVATIONS_ID
+    JOIN NMR.LEANHIS.PATIENTVISITS pv
+            ON o.PATIENTVISITUID = pv._ID
+    WHERE pv.STARTDATE >= (SELECT report_start  FROM CHI_REPORTING.chi_config)
+      AND pv.STARTDATE <  (SELECT report_end    FROM CHI_REPORTING.chi_config)
+      AND ov.NAME = 'BMI'
+      AND TRY_TO_DECIMAL(REGEXP_SUBSTR(ov.RESULTVALUE, '[0-9]+(\\.[0-9]+)?'), 10, 2)
+            BETWEEN 10 AND 80                   -- exclude implausible outliers
+    GROUP BY o.PATIENTUID
+),
+
+-- Risk factor 2: HTN diagnosis (re-uses existing HTN cohort view)
+htn_flag AS (
+    SELECT patient_key, has_any_htn_diagnosis
+    FROM CHI_REPORTING.stg_htn_cohort
+),
+
+-- Risk factor 3: DLP diagnosis (re-uses existing DLP cohort view)
+dlp_flag AS (
+    SELECT patient_key, has_any_dlp_diagnosis
+    FROM CHI_REPORTING.stg_dlp_cohort
+),
+
+-- Risk factor 4: First-degree family history of diabetes — PLACEHOLDER
+-- TODO: When a structured family-history source becomes available (e.g.
+--       FAMILY_HISTORY table with code Z83.3), replace this CTE with a
+--       real LEFT JOIN. For now, hardcoded FALSE so the SQL is structured
+--       and the flag can be flipped on once data exists.
+family_history_flag AS (
+    SELECT DISTINCT patient_key, FALSE AS has_family_history_diabetes
+    FROM CHI_REPORTING.stg_htn_cohort        -- reuses the same patient universe
+),
+
+-- Risk factor 5: gestational diabetes history (re-uses DM cohort view)
+gdm_flag AS (
+    SELECT patient_key, has_gdm
+    FROM CHI_REPORTING.stg_dm_cohort
+),
+
+-- Risk factor 6: PCOS / PMOS proxy via E28.2
+pcos_dx AS (
+    SELECT
+        PATIENTUID                              AS patient_key,
+        BOOLOR_AGG(TRIM(UPPER(ICD10_CODE)) = 'E28.2')
+                                                AS has_pcos
+    FROM NMR.LEANHIS.DIAGNOSIS_CODES
+    WHERE TRIM(UPPER(ICD10_CODE)) = 'E28.2'
+    GROUP BY PATIENTUID
+),
+
+phc_assignment AS (
+    SELECT PATIENTUID AS patient_key, HEALTH_CLUSTER AS health_cluster_raw
+    FROM NMR.LEANHIS.PHC_ASSIGNMENT
+)
+
+SELECT
+    patient_key,
+    gender,
+    age_at_jan1,
+    is_in_total_population,
+    health_cluster,
+
+    -- Prediabetes diagnosis history
+    first_r73_date,
+    has_prediabetes,
+
+    -- 6 risk-factor flags (each boolean)
+    has_bmi_ge_25,
+    has_htn_dx,
+    has_dlp_dx,
+    has_family_history_diabetes,
+    has_gdm_history,
+    has_pcos,
+
+    -- Aggregated risk-factor count (0..6) and high-risk flag
+    risk_factor_count,
+    CASE WHEN risk_factor_count >= 2 THEN TRUE ELSE FALSE END
+                                                AS is_high_risk_prediab,
+
+    -- Cohort membership flags
+    CASE WHEN is_in_total_population
+          AND COALESCE(has_prediabetes, FALSE)
+         THEN TRUE ELSE FALSE
+    END                                         AS is_prediab_prevalent,
+    CASE WHEN is_in_total_population
+          AND NOT COALESCE(has_prediabetes, FALSE)
+         THEN TRUE ELSE FALSE
+    END                                         AS is_in_at_risk_prediab
+FROM (
+    SELECT
+        tp.patient_key,
+        tp.gender,
+        tp.age_at_jan1,
+        tp.is_in_total_population,
+        COALESCE(phc.health_cluster_raw, 'Unassigned') AS health_cluster,
+        pdx.first_r73_date,
+        COALESCE(pdx.has_r73, FALSE)                AS has_prediabetes,
+        COALESCE(bmi.latest_bmi_value >= 25.0, FALSE)
+                                                    AS has_bmi_ge_25,
+        COALESCE(htn.has_any_htn_diagnosis, FALSE)  AS has_htn_dx,
+        COALESCE(dlp.has_any_dlp_diagnosis, FALSE)  AS has_dlp_dx,
+        COALESCE(fh.has_family_history_diabetes, FALSE)
+                                                    AS has_family_history_diabetes,
+        COALESCE(gdm.has_gdm, FALSE)                AS has_gdm_history,
+        COALESCE(pcos.has_pcos, FALSE)              AS has_pcos,
+        (CASE WHEN bmi.latest_bmi_value >= 25.0            THEN 1 ELSE 0 END
+       + CASE WHEN COALESCE(htn.has_any_htn_diagnosis, FALSE)  THEN 1 ELSE 0 END
+       + CASE WHEN COALESCE(dlp.has_any_dlp_diagnosis, FALSE)  THEN 1 ELSE 0 END
+       + CASE WHEN COALESCE(fh.has_family_history_diabetes, FALSE) THEN 1 ELSE 0 END
+       + CASE WHEN COALESCE(gdm.has_gdm, FALSE)              THEN 1 ELSE 0 END
+       + CASE WHEN COALESCE(pcos.has_pcos, FALSE)            THEN 1 ELSE 0 END
+        )                                           AS risk_factor_count
+    FROM total_population tp
+    LEFT JOIN phc_assignment        phc  USING (patient_key)
+    LEFT JOIN prediab_diagnosis_summary pdx USING (patient_key)
+    LEFT JOIN bmi_latest            bmi  USING (patient_key)
+    LEFT JOIN htn_flag              htn  USING (patient_key)
+    LEFT JOIN dlp_flag              dlp  USING (patient_key)
+    LEFT JOIN family_history_flag   fh   USING (patient_key)
+    LEFT JOIN gdm_flag              gdm  USING (patient_key)
+    LEFT JOIN pcos_dx               pcos USING (patient_key)
+) base;
+
+
+-- ############################################################################
+-- VIEW 2: stg_prediab_diagnosis
+-- ############################################################################
+-- Grain: one row per R73.03 diagnosis record.
+-- Extracts all prediabetes ICD-10 codes (R73.03 only) with first-occurrence rank.
+-- Useful for debugging: see exactly when each patient was diagnosed.
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_diagnosis AS
+
+SELECT
+    PATIENTUID                              AS patient_key,
+    DIAGNOSIS_DATE                          AS diagnosis_date,
+    ICD10_CODE                              AS icd10_code,
+    DIAGNOSIS_DESCRIPTION                   AS icd10_description,
+    ROW_NUMBER() OVER (
+        PARTITION BY PATIENTUID, ICD10_CODE
+        ORDER BY DIAGNOSIS_DATE
+    )                                       AS diagnosis_rank
+FROM NMR.LEANHIS.DIAGNOSIS_CODES                -- [PLACEHOLDER]
+WHERE TRIM(UPPER(ICD10_CODE)) = 'R73.03';       -- [PLACEHOLDER]-- ============================================================================
+-- PREDIABETES (PREDIAB) — ANALYTICAL VIEW
+-- ============================================================================
+-- Creates 1 view: stg_prediab_patient_month — patient × month grain.
+--
+-- This is the central grain for the Prediabetes Incidence (Monthly) report.
+-- The High-Risk Prevalence (Annual) report reads from stg_prediab_cohort
+-- directly (no monthly granularity needed).
+--
+-- Carries forward from stg_prediab_cohort:
+--   • All 6 risk-factor flags + risk_factor_count + is_high_risk_prediab
+--   • first_r73_date, has_prediabetes, is_prediab_prevalent, is_in_at_risk_prediab
+--
+-- Time-varying columns computed here:
+--   • is_prediab_at_risk_start    — at-risk at month start (no prior R73.03)
+--   • has_r73_before_month        — R73.03 already diagnosed before this month
+--   • is_prediab_incident_case    — first-ever R73.03 this month while at-risk
+--   • had_visit                   — any visit this month
+--
+-- Prerequisites:
+--   1. Run 00_config.sql                  (chi_config)
+--   2. Run Diabetes/dm_staging_views.sql  (stg_dm_cohort for has_gdm)
+--   3. Run HTN/htn_staging_views.sql      (stg_htn_cohort for has_htn)
+--   4. Run DLP/dlp_staging_views.sql      (stg_dlp_cohort for has_dlp)
+--   5. Run Prediabetes/prediab_staging_views.sql (stg_prediab_cohort)
+-- ============================================================================
+
+
+CREATE OR REPLACE VIEW CHI_REPORTING.stg_prediab_patient_month AS
+
+WITH patient_visits AS (
+    SELECT
+        PATIENTUID                              AS patient_key,
+        YEAR(STARTDATE) * 100 + MONTH(STARTDATE) AS year_month_key
+    FROM NMR.LEANHIS.PATIENTVISITS
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE STARTDATE >= cfg.report_start
+      AND STARTDATE <  cfg.report_end
+    GROUP BY PATIENTUID, year_month_key
+),
+
+patient_months_spine AS (
+    SELECT
+        bc.patient_key,
+        m.year_month_key,
+        m.report_year,
+        m.report_month,
+        bc.gender,
+        bc.age_at_jan1,
+        bc.is_in_total_population,
+        bc.health_cluster,
+        bc.is_prediab_prevalent,
+        bc.is_in_at_risk_prediab,
+        bc.is_high_risk_prediab,
+        bc.risk_factor_count,
+        bc.first_r73_date,
+        bc.has_prediabetes,
+
+        -- Risk-factor flags carried forward (constants per patient)
+        bc.has_bmi_ge_25,
+        bc.has_htn_dx,
+        bc.has_dlp_dx,
+        bc.has_family_history_diabetes,
+        bc.has_gdm_history,
+        bc.has_pcos,
+
+        -- Was R73.03 already diagnosed BEFORE this month?
+        CASE WHEN bc.first_r73_date IS NOT NULL
+              AND bc.first_r73_date < TO_DATE(
+                      m.year_month_key::VARCHAR || '01', 'YYYYMMDD'
+                  )
+             THEN TRUE ELSE FALSE
+        END                                     AS has_r73_before_month,
+
+        -- At-risk at month start = no R73.03 prior to this month
+        CASE WHEN NOT (bc.first_r73_date IS NOT NULL
+                       AND bc.first_r73_date < TO_DATE(
+                               m.year_month_key::VARCHAR || '01', 'YYYYMMDD'
+                           ))
+             THEN TRUE ELSE FALSE
+        END                                     AS is_prediab_at_risk_start
+
+    FROM CHI_REPORTING.stg_prediab_cohort bc
+    CROSS JOIN (
+        SELECT
+            seq                                 AS report_month,
+            cfg.report_year * 100 + seq         AS year_month_key,
+            cfg.report_year                     AS report_year
+        FROM (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12)) AS m(seq)
+        CROSS JOIN CHI_REPORTING.chi_config cfg
+    ) m
+    WHERE bc.is_in_total_population = TRUE
+)
+
+SELECT
+    pms.*,
+
+    -- Visit flag
+    CASE WHEN pv.patient_key IS NOT NULL THEN TRUE ELSE FALSE
+    END                                         AS had_visit,
+
+    -- INCIDENCE: first-ever R73.03 in this month while at-risk
+    CASE WHEN pms.first_r73_date IS NOT NULL
+          AND pms.first_r73_date >= TO_DATE(
+                  pms.year_month_key::VARCHAR || '01', 'YYYYMMDD'
+              )
+          AND pms.first_r73_date < ADD_MONTHS(
+                  TO_DATE(
+                      pms.year_month_key::VARCHAR || '01', 'YYYYMMDD'
+                  ), 1
+              )
+          AND pms.is_prediab_at_risk_start = TRUE
+         THEN TRUE ELSE FALSE
+    END                                         AS is_prediab_incident_case
+
+FROM patient_months_spine pms
+LEFT JOIN patient_visits pv
+    ON  pms.patient_key   = pv.patient_key
+    AND pms.year_month_key = pv.year_month_key;
+
+
+-- ============================================================================
+-- VERIFY
+-- ============================================================================
+-- SELECT * FROM CHI_REPORTING.stg_prediab_patient_month
+-- WHERE patient_key = 'P23'
+-- ORDER BY year_month_key;
+-- ============================================================================-- ============================================================================
+-- PREDIABETES (PREDIAB) — REPORT VIEWS
+-- ============================================================================
+-- Creates 2 Module-1 report views:
+--   1. rpt_prediab_incidence_monthly          — Report 7
+--   2. rpt_prediab_prevalence_high_risk_annual — Report 8
+--
+-- (No Module-2 monitoring views for prediabetes in this iteration.)
+--
+-- Each report emits rows with a `sort_order` column:
+--   • sort_order=0 — detail rows (per cluster / per cluster × month)
+--   • sort_order=1 — cluster subtotals (only for monthly reports)
+--   • sort_order=2 — grand total ('-- ALL CLUSTERS --')
+--
+-- Prerequisites:
+--   1. Run all Prediabetes staging + analytical views first
+-- ============================================================================
+
+
+-- ############################################################################
+-- REPORT 7: rpt_prediab_incidence_monthly
+-- ############################################################################
+-- Reports the rate of NEW prediabetes (R73.03) diagnoses per 100,000
+-- at-risk population per month, by health cluster.
+--
+-- Denominator: patients at-risk at start of month = no prior R73.03 diagnosis
+-- Numerator:   patients who received first-ever R73.03 this month
+-- Rate:        per 100,000 at-risk population
+--
+-- Direct mirror of rpt_dm_incidence_monthly (3-layer UNION ALL).
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_incidence_monthly AS
+
+WITH incidence_metrics AS (
+    SELECT
+        health_cluster,
+        report_year,
+        report_month,
+        year_month_key,
+        COUNT(DISTINCT CASE WHEN is_prediab_at_risk_start = TRUE
+                        THEN patient_key END)   AS at_risk_population_start,
+        COUNT(DISTINCT CASE WHEN is_prediab_incident_case = TRUE
+                        THEN patient_key END)   AS incident_cases,
+        ROUND(incident_cases / NULLIF(at_risk_population_start, 0) * 100000, 2)
+                                                AS incidence_rate_per_100k
+    FROM CHI_REPORTING.stg_prediab_patient_month
+    GROUP BY health_cluster, report_year, report_month, year_month_key
+)
+
+-- Monthly detail rows (sort_order=0)
+SELECT
+    report_year                              AS year,
+    health_cluster,
+    TO_VARCHAR(
+        TO_DATE(year_month_key::VARCHAR || '01', 'YYYYMMDD'),
+        'MON YYYY'
+    )                                        AS period,
+    at_risk_population_start,
+    incident_cases,
+    incidence_rate_per_100k,
+    year_month_key                           AS sort_key,
+    0                                        AS sort_order
+FROM incidence_metrics
+
+UNION ALL
+
+-- Cluster subtotal rows (sort_order=1)
+-- Annual rate = total cases / January at-risk × 100,000
+SELECT
+    report_year                              AS year,
+    health_cluster,
+    '── ' || health_cluster || ' TOTAL ──'  AS period,
+    NULL                                     AS at_risk_population_start,
+    SUM(incident_cases)                      AS incident_cases,
+    ROUND(SUM(incident_cases) / NULLIF(
+        MAX(CASE WHEN report_month = 1 THEN at_risk_population_start END), 0
+    ) * 100000, 2)                           AS incidence_rate_per_100k,
+    99999                                    AS sort_key,
+    1                                        AS sort_order
+FROM incidence_metrics
+GROUP BY health_cluster, report_year
+
+UNION ALL
+
+-- Grand total row — all clusters combined (sort_order=2)
+-- Annual rate = total cases / total January at-risk × 100,000
+SELECT
+    report_year                              AS year,
+    '── ALL CLUSTERS ──'                    AS health_cluster,
+    '── ' || report_year || ' ALL CLUSTERS ──' AS period,
+    NULL                                     AS at_risk_population_start,
+    SUM(incident_cases)                      AS incident_cases,
+    ROUND(SUM(incident_cases) / NULLIF(
+        SUM(CASE WHEN report_month = 1 THEN at_risk_population_start END), 0
+    ) * 100000, 2)                           AS incidence_rate_per_100k,
+    99999                                    AS sort_key,
+    2                                        AS sort_order
+FROM incidence_metrics
+GROUP BY report_year
+
+ORDER BY health_cluster, sort_order, sort_key;
+
+
+-- ############################################################################
+-- REPORT 8: rpt_prediab_prevalence_high_risk_annual
+-- ############################################################################
+-- Annual report: what % of prediabetes patients (R73.03 by year-end) carry
+-- ≥2 high-risk factors (BMI ≥25, HTN dx, DLP dx, family history, GDM, PCOS).
+--
+-- Denominator: all R73-prevalent patients at Dec 31 of report year
+-- Numerator:   subset of those with is_high_risk_prediab = TRUE
+-- Rate:        high-risk count / total prediab population × 100
+--
+-- Two-layer rows (per-cluster detail + grand total).
+-- ############################################################################
+
+CREATE OR REPLACE VIEW CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual AS
+
+WITH year_end_snap AS (
+    SELECT
+        bc.patient_key,
+        bc.health_cluster,
+        cfg.report_year                         AS report_year,
+        (bc.first_r73_date IS NOT NULL
+         AND bc.first_r73_date < cfg.report_end)
+                                                AS is_prediab_prevalent_year_end,
+        bc.is_high_risk_prediab,
+        bc.risk_factor_count
+    FROM CHI_REPORTING.stg_prediab_cohort bc
+    CROSS JOIN CHI_REPORTING.chi_config cfg
+    WHERE bc.is_in_total_population = TRUE
+)
+
+-- Detail rows (sort_order=0): per health cluster
+SELECT
+    report_year                              AS year,
+    health_cluster,
+    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                    THEN patient_key END)     AS total_prediab_population,
+    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                          AND is_high_risk_prediab
+                    THEN patient_key END)     AS high_risk_count,
+    ROUND(
+        COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                              AND is_high_risk_prediab
+                        THEN patient_key END)
+        * 100.0
+        / NULLIF(
+            COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                          THEN patient_key END), 0
+          ), 2
+    )                                         AS high_risk_pct,
+    health_cluster                            AS sort_key,
+    0                                         AS sort_order
+FROM year_end_snap
+GROUP BY health_cluster, report_year
+
+UNION ALL
+
+-- Grand total (sort_order=2): all clusters combined
+SELECT
+    report_year                              AS year,
+    '── ALL CLUSTERS ──'                    AS health_cluster,
+    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                    THEN patient_key END)     AS total_prediab_population,
+    COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                          AND is_high_risk_prediab
+                    THEN patient_key END)     AS high_risk_count,
+    ROUND(
+        COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                              AND is_high_risk_prediab
+                        THEN patient_key END)
+        * 100.0
+        / NULLIF(
+            COUNT(DISTINCT CASE WHEN is_prediab_prevalent_year_end
+                          THEN patient_key END), 0
+          ), 2
+    )                                         AS high_risk_pct,
+    '── ' || report_year || ' ALL CLUSTERS ──' AS sort_key,
+    2                                         AS sort_order
+FROM year_end_snap
+GROUP BY report_year
+
+ORDER BY sort_order, sort_key;
