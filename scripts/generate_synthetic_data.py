@@ -150,6 +150,14 @@ patients = [
     # P16: E13 (Other specified DM) → excluded from at-risk
     ("P16", "NAT-00016", "Male",   date(1974, 4, 2), None),
 
+    # ── PREDIABETES-SPECIFIC (eligible, R73.03 only) ──────────────
+    # P22: Female, prevalent prediabetes + HTN dx + BMI ≥ 25 → high-risk (≥2 factors)
+    ("P22", "NAT-00022", "Female", date(1975, 7,14), None),
+    # P23: Male, incident prediabetes (May 2025) + HTN + DLP + BMI ≥ 25 → high-risk
+    ("P23", "NAT-00023", "Male",   date(1981,11,22), None),
+    # P24: Female, prevalent prediabetes + no other risk factors → NOT high-risk
+    ("P24", "NAT-00024", "Female", date(1988, 4, 5), None),
+
     # ── NOT ELIGIBLE ────────────────────────────────────────────────────
     # P07: Age 17 → under 18
     ("P07", "NAT-00007", "Female", date(2007, 3,10), None),  # turns 18 in Mar 2025
@@ -367,6 +375,18 @@ for month in range(1, 13):
         add_fbs_lab("P20", visit_date, visit_id, 170.0)
         add_a1c_lab("P20", visit_date, visit_id, 9.0)
 
+    # ── P22: monthly visits (prediabetes + HTN; risk-factor data added by extend script) ──
+    visit_id += 1
+    visits.append((visit_id, "P22", visit_date))
+
+    # ── P23: monthly visits (incident prediabetes; risk-factor data added by extend script) ──
+    visit_id += 1
+    visits.append((visit_id, "P23", visit_date))
+
+    # ── P24: monthly visits (prediabetes, NO other risk factors; single BMI reading) ──
+    visit_id += 1
+    visits.append((visit_id, "P24", visit_date))
+
 # Insert all generated records
 con.executemany("INSERT INTO NMR.LEANHIS_PATIENTVISITS VALUES (?, ?, ?)", visits)
 con.executemany("INSERT INTO NMR.LEANHIS_LABRESULTS VALUES (?, ?, ?)", lab_results)
@@ -407,6 +427,16 @@ add_dx("P11", date(2024, 7, 5), "O24", "Gestational diabetes mellitus")
 # P12: Prediabetes (R73.03) diagnosed in 2024 — still at-risk
 add_dx("P12", date(2024, 9, 12), "R73.03", "Prediabetes")
 
+# Additional prediabetes diagnoses — progression cases (R73.03 → E11 same month)
+add_dx("P03", date(2025, 6, 20), "R73.03", "Prediabetes")           # incident, same month as E11
+add_dx("P15", date(2024,11, 15), "R73.03", "Prediabetes")           # pre-existing prediabetes
+add_dx("P19", date(2025,12, 10), "R73.03", "Prediabetes")           # incident, same month as E11
+
+# P22/P23/P24 — prediabetes cohort test cases (see extend script for risk-factor data)
+add_dx("P22", date(2024, 3, 20), "R73.03", "Prediabetes")           # prevalent, high-risk
+add_dx("P23", date(2025, 5, 12), "R73.03", "Prediabetes")           # incident, high-risk
+add_dx("P24", date(2024, 8,  8), "R73.03", "Prediabetes")           # prevalent, NOT high-risk
+
 # P15: No DM diagnosis yet (labs are abnormal but no formal E11)
 # (no diagnosis for P15 — tests edge case)
 
@@ -432,19 +462,21 @@ con.executemany(
 # PHC ASSIGNMENT (Health Cluster mapping)
 # ===========================================================================
 # Maps each patient to a health cluster. Patients without a record → 'Unassigned'.
-# Cluster A (7 patients): P01, P02, P03, P04, P06, P12, P15
-# Cluster B (6 patients): P05, P10, P13, P14, P17, P19
-# Cluster C (3 patients): P16, P18, P20
+# Cluster A (8 patients): P01, P02, P03, P04, P06, P12, P15, P22
+# Cluster B (7 patients): P05, P10, P13, P14, P17, P19, P23
+# Cluster C (4 patients): P16, P18, P20, P24
 # Unassigned (1 patient):  P11 (GDM, deliberately missing)
 # Ineligible patients (P07, P08, P09) are omitted — irrelevant for reports.
 
 cluster_assignments = [
     ("P01", "Cluster A"), ("P02", "Cluster A"), ("P03", "Cluster A"),
     ("P04", "Cluster A"), ("P06", "Cluster A"), ("P12", "Cluster A"),
-    ("P15", "Cluster A"),
+    ("P15", "Cluster A"), ("P22", "Cluster A"),
     ("P05", "Cluster B"), ("P10", "Cluster B"), ("P13", "Cluster B"),
     ("P14", "Cluster B"), ("P17", "Cluster B"), ("P19", "Cluster B"),
+    ("P23", "Cluster B"),
     ("P16", "Cluster C"), ("P18", "Cluster C"), ("P20", "Cluster C"),
+    ("P24", "Cluster C"),
     # P11 intentionally omitted — tests COALESCE → 'Unassigned'
 ]
 
