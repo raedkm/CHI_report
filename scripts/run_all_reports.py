@@ -653,8 +653,8 @@ ORDER BY health_cluster, sort_order, sort_key
 # ===========================================================================
 # Prediabetes has a different shape from the other 4 conditions:
 #   • 2 standard Module-1 reports (prevalence annual, incidence monthly)
-#   • NO Module-2 monitoring views (deferred)
-#   • The high-risk report is now GENERIC (run_high_risk_reports below)
+#   • 1 Module-2 report (high-risk prevalence, v1 specific to prediab)
+#   • NO condition-specific Module-2 monitoring views (deferred)
 #
 # The reports query the CHI_REPORTING views directly (not the raw NMR.LEANHIS_*
 # tables), so they exercise the same path as the runner's Module-2 reports.
@@ -696,26 +696,31 @@ def run_prediab_reports(con):
 
 
 # ===========================================================================
-# HIGH-RISK PATIENTS REPORT — generic Module-2 dispatcher
+# HIGH-RISK PATIENTS REPORT — prediabetes-specific dispatcher (v1)
 # ===========================================================================
-# Generic High-Risk Patients report (Report 7) parameterized by condition via
-# the chi_high_risk_factors config table. For v1 only PREDIAB has factors
-# defined, but the report is extendable to other conditions by inserting
-# rows into the config.
+# The High-Risk Patients report is GENERIC by design (parameterized by
+# chi_high_risk_factors), but the v1 implementation is prediabetes-specific
+# (only PREDIAB has factors defined). It is therefore filed under
+# project_queries/Prediabetes/prediab_high_risk_report.sql as
+# rpt_prediab_prevalence_high_risk_annual, and the runner's "prediab"
+# dispatch runs it alongside the other 2 prediabetes reports. When other
+# conditions get factors defined, each will have its own per-condition
+# report in its own folder; the generic Module-2 aggregator (if added
+# later) will need its own top-level dispatcher here.
 def run_high_risk_reports(con):
-    """Run the generic Module-2 High-Risk Patients report across all conditions."""
-    name = "High-Risk Patients"
+    """Run the prediabetes-specific High-Risk Patients report (Module 2, v1)."""
+    name = "Prediabetes (PREDIAB)"
 
     hr_sql = """
-    SELECT condition, health_cluster, total_prevalent, high_risk_count,
+    SELECT year, health_cluster, total_prediab_population, high_risk_count,
            high_risk_pct, sort_key, sort_order
-    FROM CHI_REPORTING.rpt_high_risk_patients_annual
-    ORDER BY condition, sort_order, sort_key
+    FROM CHI_REPORTING.rpt_prediab_prevalence_high_risk_annual
+    ORDER BY sort_order, health_cluster
     """
     rows = run_query(con, hr_sql)
-    subheader(f"{name} — Report 7 (Generic, M2): High-Risk Patients (Annual)")
+    subheader(f"{name} — Report 7: High-Risk Prevalence (Annual)")
     print_table(
-        ["Condition", "Cluster", "Total Prevalent", "High-Risk", "HR %"],
+        ["Year", "Cluster", "Total Prediab", "High-Risk", "HR %"],
         rows,
         [str, str, str, str, lambda v: f"{v:.2f}%" if v is not None else "  N/A"]
     )
